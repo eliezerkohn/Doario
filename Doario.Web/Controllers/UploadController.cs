@@ -13,21 +13,23 @@ public class UploadController : ControllerBase
     private readonly SharePointService _sharePoint;
     private readonly DoarioDataContext _db;
     private readonly TenantContext _tenantContext;
+    private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<UploadController> _logger;
 
     public UploadController(
         SharePointService sharePoint,
         DoarioDataContext db,
         TenantContext tenantContext,
+        IServiceScopeFactory scopeFactory,
         ILogger<UploadController> logger)
     {
         _sharePoint = sharePoint;
         _db = db;
         _tenantContext = tenantContext;
+        _scopeFactory = scopeFactory;
         _logger = logger;
     }
 
-    // POST /api/upload — receives file, uploads to SharePoint, creates Document row
     [HttpPost]
     public async Task<IActionResult> Upload(IFormFile file)
     {
@@ -72,6 +74,17 @@ public class UploadController : ControllerBase
         _logger.LogInformation(
             "Document {DocumentId} created for tenant {TenantId}.",
             document.DocumentId, _tenantContext.TenantId);
+
+        // Fire OCR using IServiceScopeFactory — singleton, never disposed
+        var documentId = document.DocumentId;
+        var scopeFactory = _scopeFactory;
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(500);
+            using var scope = scopeFactory.CreateScope();
+            var ocrService = scope.ServiceProvider.GetRequiredService<OcrService>();
+            await ocrService.RunOcrAsync(documentId);
+        });
 
         return Ok(new
         {

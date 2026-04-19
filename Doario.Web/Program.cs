@@ -55,6 +55,12 @@ public class Program
         builder.Services.AddScoped<TenantContext>();
         builder.Services.AddScoped<TenantResolutionMiddleware>();
 
+        // ── OCR Service ───────────────────────────────────────────────────────
+        builder.Services.Configure<OcrOptions>(
+        builder.Configuration.GetSection("DocumentIntelligence"));
+
+        builder.Services.AddScoped<OcrService>();
+
         // ── SharePoint ────────────────────────────────────────────────────────
         builder.Services.Configure<SharePointOptions>(
             builder.Configuration.GetSection("SharePoint"));
