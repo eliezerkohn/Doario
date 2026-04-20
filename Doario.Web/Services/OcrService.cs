@@ -13,16 +13,19 @@ public class OcrService
     private readonly GraphServiceClient _graph;
     private readonly DocumentIntelligenceClient _docIntelligence;
     private readonly ILogger<OcrService> _logger;
+    private readonly AiSummaryService _aiSummary;
 
     public OcrService(
         DoarioDataContext db,
         GraphServiceClient graph,
         IOptions<OcrOptions> ocrOptions,
-        ILogger<OcrService> logger)
+        ILogger<OcrService> logger,
+        AiSummaryService aiSummary)
     {
         _db = db;
         _graph = graph;
         _logger = logger;
+        _aiSummary = aiSummary;
 
         _docIntelligence = new DocumentIntelligenceClient(
             new Uri(ocrOptions.Value.Endpoint),
@@ -60,9 +63,9 @@ public class OcrService
             }
 
             var operation = await _docIntelligence.AnalyzeDocumentAsync(
-     WaitUntil.Completed,
-     "prebuilt-read",
-     BinaryData.FromStream(fileStream));
+                WaitUntil.Completed,
+                "prebuilt-read",
+                BinaryData.FromStream(fileStream));
 
             var result = operation.Value;
 
@@ -98,6 +101,9 @@ public class OcrService
             _logger.LogInformation(
                 "OcrService: OCR complete. DocumentId={Id}, Characters={Count}",
                 documentId, document.OcrText?.Length ?? 0);
+
+            // Fire AI summary in background after OCR completes
+            _aiSummary.RunInBackground(documentId);
         }
         catch (Exception ex)
         {

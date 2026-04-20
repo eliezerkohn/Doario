@@ -57,6 +57,12 @@ namespace Doario.Data.Models.Mail
         /// </summary>
         public decimal SenderMatchConfidence { get; set; }
 
+        /// <summary>
+        /// Clean AI-generated summary of the document.
+        /// Null until AI summarisation runs.
+        /// </summary>
+        public string AiSummary { get; set; }
+
         public DateTime UploadedAt { get; set; } = DateTime.UtcNow;
     }
 }

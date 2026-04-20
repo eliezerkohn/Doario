@@ -16,6 +16,8 @@ const Layout = ({ children }) => {
                         <div className="navbar-collapse collapse d-sm-inline-flex justify-content-between">
                             <ul className="navbar-nav flex-grow-1">
                                 <li className="nav-item"><Link to="/" className='nav-link text-light'>Home</Link></li>
+                                <li className="nav-item"><Link to="/upload-test" className='nav-link text-light'>📷 Upload</Link></li>
+                                <li className="nav-item"><Link to="/admin/queue" className='nav-link text-light'>📬 Mail Queue</Link></li>
                             </ul>
                         </div>
                     </div>
