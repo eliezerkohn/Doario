@@ -53,7 +53,7 @@ public class DoarioDataContext : DbContext
     public DbSet<Document> Documents { get; set; }
     public DbSet<DocumentAssignment> DocumentAssignments { get; set; }
     public DbSet<DocumentDelivery> DocumentDeliveries { get; set; }
-    public DbSet<ImportedStaff> ImportedStaffs { get; set; }
+    public DbSet<ImportedStaff> ImportedStaff { get; set; }
     public DbSet<ImportedSender> ImportedSenders { get; set; }
     public DbSet<DocumentMessage> DocumentMessages { get; set; }
 

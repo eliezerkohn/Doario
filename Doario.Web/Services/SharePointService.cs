@@ -27,7 +27,7 @@ public class SharePointService
     }
 
     // -------------------------------------------------------------------------
-    // Public entry point — called by the controller
+    // Upload — called by UploadController on scan/fax/email ingestion
     // -------------------------------------------------------------------------
 
     public async Task<string> UploadDocumentAsync(
@@ -40,20 +40,14 @@ public class SharePointService
             .FirstOrDefaultAsync(t => t.TenantId == tenantId, cancellationToken);
 
         if (tenant is null)
-            throw new InvalidOperationException(
-                $"Tenant {tenantId} not found.");
+            throw new InvalidOperationException($"Tenant {tenantId} not found.");
 
-        // Resolve Site ID — uses DB cache or calls Graph once
         var siteId = await ResolveSiteIdAsync(tenant, cancellationToken);
-
-        // Find or create "Doario Mail Room" library
         var driveId = await GetOrCreateDriveAsync(siteId, cancellationToken);
 
-        // Unique file name — timestamp + GUID prevents any collision
         var uniqueFileName =
             $"{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}-{fileName}";
 
-        // Year/month folder — Graph creates folders automatically if missing
         var year = DateTime.UtcNow.ToString("yyyy");
         var month = DateTime.UtcNow.ToString("MM - MMMM");
         var filePath = $"Doario Mail Room/{year}/{month}/{uniqueFileName}";
@@ -61,11 +55,9 @@ public class SharePointService
         string sharePointUrl;
 
         if (fileStream.Length <= 4 * 1024 * 1024)
-            sharePointUrl = await SimpleUploadAsync(
-                driveId, filePath, fileStream, cancellationToken);
+            sharePointUrl = await SimpleUploadAsync(driveId, filePath, fileStream, cancellationToken);
         else
-            sharePointUrl = await LargeFileUploadAsync(
-                driveId, filePath, fileStream, cancellationToken);
+            sharePointUrl = await LargeFileUploadAsync(driveId, filePath, fileStream, cancellationToken);
 
         _logger.LogInformation(
             "Tenant {TenantId} — uploaded {FileName} → {Url}",
@@ -75,21 +67,112 @@ public class SharePointService
     }
 
     // -------------------------------------------------------------------------
-    // Site ID — resolve once, save to DB, never call Graph again for this tenant
+    // Download — called by EmailDeliveryService to attach file to email
+    // Downloads into memory only — never written to disk
+    // Returns (bytes, contentType) or throws on failure
+    // -------------------------------------------------------------------------
+
+    public async Task<(byte[] Bytes, string ContentType)> DownloadFileAsync(
+        Guid tenantId,
+        string sharePointUrl,
+        CancellationToken cancellationToken = default)
+    {
+        var tenant = await _db.Tenants
+            .FirstOrDefaultAsync(t => t.TenantId == tenantId, cancellationToken);
+
+        if (tenant is null)
+            throw new InvalidOperationException($"Tenant {tenantId} not found.");
+
+        var siteId = await ResolveSiteIdAsync(tenant, cancellationToken);
+        var driveId = await GetOrCreateDriveAsync(siteId, cancellationToken);
+
+        // Resolve the DriveItem ID from the WebUrl
+        // Graph v5: search by webUrl filter to get item ID
+        var encodedUrl = Uri.EscapeDataString(sharePointUrl);
+        var itemRequest = await _graph.Drives[driveId]
+            .Root
+            .ItemWithPath(ExtractPathFromUrl(sharePointUrl))
+            .GetAsync(cancellationToken: cancellationToken);
+
+        if (itemRequest?.Id is null)
+            throw new InvalidOperationException(
+                $"Could not resolve SharePoint item for URL: {sharePointUrl}");
+
+        // Download content stream into memory
+        var stream = await _graph.Drives[driveId]
+            .Items[itemRequest.Id]
+            .Content
+            .GetAsync(cancellationToken: cancellationToken);
+
+        if (stream is null)
+            throw new InvalidOperationException(
+                $"SharePoint returned no content for item {itemRequest.Id}");
+
+        using var ms = new MemoryStream();
+        await stream.CopyToAsync(ms, cancellationToken);
+        var bytes = ms.ToArray();
+
+        // Determine content type from file extension
+        var ext = Path.GetExtension(sharePointUrl).ToLowerInvariant();
+        var contentType = ext switch
+        {
+            ".pdf" => "application/pdf",
+            ".png" => "image/png",
+            ".jpg" => "image/jpeg",
+            ".jpeg" => "image/jpeg",
+            ".tif" => "image/tiff",
+            ".tiff" => "image/tiff",
+            _ => "application/octet-stream"
+        };
+
+        _logger.LogInformation(
+            "Tenant {TenantId} — downloaded {Bytes} bytes from SharePoint for email attachment.",
+            tenantId, bytes.Length);
+
+        return (bytes, contentType);
+    }
+
+    // -------------------------------------------------------------------------
+    // Extracts the relative file path from a SharePoint WebUrl
+    // e.g. https://tenant.sharepoint.com/sites/X/Shared%20Documents/Doario%20Mail%20Room/...
+    //   -> Doario Mail Room/2026/04 - April/filename.pdf
+    // -------------------------------------------------------------------------
+
+    private static string ExtractPathFromUrl(string webUrl)
+    {
+        // Decode and find the path after "Shared Documents/"
+        var decoded = Uri.UnescapeDataString(webUrl);
+        var marker = "Shared Documents/";
+        var idx = decoded.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+
+        if (idx < 0)
+        {
+            // Fallback — try "Documents/"
+            marker = "Documents/";
+            idx = decoded.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (idx < 0)
+            throw new InvalidOperationException(
+                $"Cannot extract SharePoint path from URL: {webUrl}");
+
+        return decoded[(idx + marker.Length)..];
+    }
+
+    // -------------------------------------------------------------------------
+    // Site ID resolution — cached in DB after first call
     // -------------------------------------------------------------------------
 
     private async Task<string> ResolveSiteIdAsync(
-     Tenant tenant,
-     CancellationToken cancellationToken)
+        Tenant tenant,
+        CancellationToken cancellationToken)
     {
-        // Already in DB — return immediately, no Graph call
         if (tenant.SharePointSiteId is not null)
             return tenant.SharePointSiteId;
 
         if (string.IsNullOrWhiteSpace(tenant.SharePointSiteUrl))
             throw new InvalidOperationException(
-                $"Tenant {tenant.TenantId} has no SharePointSiteUrl configured. " +
-                $"SharePoint must be set up before documents can be uploaded.");
+                $"Tenant {tenant.TenantId} has no SharePointSiteUrl configured.");
 
         _logger.LogInformation(
             "Tenant {TenantId} — resolving SharePoint Site ID for the first time.",
@@ -99,8 +182,6 @@ public class SharePointService
         var hostname = uri.Host;
         var sitePath = uri.AbsolutePath.TrimStart('/');
 
-        // For root site (no path) use hostname only
-        // For site collections (with path) use hostname:/path: format
         var siteKey = string.IsNullOrEmpty(sitePath)
             ? hostname
             : $"{hostname}:/{sitePath}:";
@@ -113,7 +194,6 @@ public class SharePointService
                 $"SharePoint site not found for tenant {tenant.TenantId}. " +
                 $"Check SharePointSiteUrl: {tenant.SharePointSiteUrl}");
 
-        // Save to DB — this Graph call never happens again for this tenant
         tenant.SharePointSiteId = site.Id;
         await _db.SaveChangesAsync(cancellationToken);
 
@@ -125,58 +205,50 @@ public class SharePointService
     }
 
     // -------------------------------------------------------------------------
-    // Drive — find "Doario Mail Room", create it if this is a brand new tenant
+    // Drive resolution — find or create "Doario Mail Room" library
     // -------------------------------------------------------------------------
 
     private async Task<string> GetOrCreateDriveAsync(
         string siteId,
         CancellationToken cancellationToken)
     {
-        var library = _options.DocumentLibrary; // "Doario Mail Room"
+        var library = _options.DocumentLibrary;
 
         var drivesResponse = await _graph.Sites[siteId].Drives
             .GetAsync(cancellationToken: cancellationToken);
 
         var drive = drivesResponse?.Value?
             .FirstOrDefault(d =>
-                string.Equals(d.Name, library,
-                    StringComparison.OrdinalIgnoreCase));
+                string.Equals(d.Name, library, StringComparison.OrdinalIgnoreCase));
 
-        // Found — return immediately
         if (drive?.Id is not null)
             return drive.Id;
 
-        // Not found — create it
-        // This runs exactly once per tenant on their very first upload
         _logger.LogInformation(
             "Library '{Library}' not found on site {SiteId} — creating it.",
             library, siteId);
 
-        // Graph v5 — ListInfo is a nested property, Template uses the BaseType string
-        // ListTemplate enum does not exist in v5 — use the string value directly
         await _graph.Sites[siteId].Lists
             .PostAsync(new Microsoft.Graph.Models.List
             {
                 DisplayName = library,
                 AdditionalData = new Dictionary<string, object>
                 {
-            { "template", "documentLibrary" }
+                    { "template", "documentLibrary" }
                 }
             },
             cancellationToken: cancellationToken);
-        // Fetch drives again — newly created library now appears
+
         var updatedDrives = await _graph.Sites[siteId].Drives
             .GetAsync(cancellationToken: cancellationToken);
 
         var createdDrive = updatedDrives?.Value?
             .FirstOrDefault(d =>
-                string.Equals(d.Name, library,
-                    StringComparison.OrdinalIgnoreCase));
+                string.Equals(d.Name, library, StringComparison.OrdinalIgnoreCase));
 
         if (createdDrive?.Id is null)
             throw new InvalidOperationException(
-                $"Created library '{library}' on site {siteId} " +
-                $"but could not resolve its Drive ID.");
+                $"Created library '{library}' on site {siteId} but could not resolve its Drive ID.");
 
         _logger.LogInformation(
             "Library '{Library}' created successfully on site {SiteId}.",
@@ -186,7 +258,7 @@ public class SharePointService
     }
 
     // -------------------------------------------------------------------------
-    // Simple upload — one request, for files 4 MB and under
+    // Simple upload — files 4 MB and under
     // -------------------------------------------------------------------------
 
     private async Task<string> SimpleUploadAsync(
@@ -195,9 +267,6 @@ public class SharePointService
         Stream fileStream,
         CancellationToken cancellationToken)
     {
-        // filePath example: "2026/04 - April/20260416-143022-{guid}-letter.pdf"
-        // Graph creates year and month folders automatically if they do not exist
-
         var item = await _graph.Drives[driveId]
             .Root
             .ItemWithPath(filePath)
@@ -205,9 +274,7 @@ public class SharePointService
             .PutAsync(fileStream,
                 requestConfiguration: config =>
                 {
-                    // Safety net — if name exists rename new file, never overwrite
-                    config.Headers.Add(
-                        "@microsoft.graph.conflictBehavior", "rename");
+                    config.Headers.Add("@microsoft.graph.conflictBehavior", "rename");
                 },
                 cancellationToken: cancellationToken);
 
@@ -219,7 +286,7 @@ public class SharePointService
     }
 
     // -------------------------------------------------------------------------
-    // Large file upload — chunked, for files over 4 MB
+    // Large file upload — chunked, files over 4 MB
     // -------------------------------------------------------------------------
 
     private async Task<string> LargeFileUploadAsync(
@@ -228,7 +295,6 @@ public class SharePointService
         Stream fileStream,
         CancellationToken cancellationToken)
     {
-        // Graph v5 — upload session lives under Drives.Item.Items.Item namespace
         var uploadSessionRequestBody =
             new Microsoft.Graph.Drives.Item.Items.Item
                 .CreateUploadSession.CreateUploadSessionPostRequestBody
@@ -237,13 +303,11 @@ public class SharePointService
                 {
                     AdditionalData = new Dictionary<string, object>
                     {
-                        // Consistent with simple upload — rename on conflict
                         { "@microsoft.graph.conflictBehavior", "rename" }
                     }
                 }
             };
 
-        // Stage 1 — create upload session via Root.ItemWithPath
         var uploadSession = await _graph.Drives[driveId]
             .Root
             .ItemWithPath(filePath)
@@ -255,12 +319,9 @@ public class SharePointService
             throw new InvalidOperationException(
                 "Failed to create a SharePoint upload session.");
 
-        // Stage 2 — SDK cuts file into 320 KB slices (Microsoft's minimum)
-        // and handles sequencing, retries, and final assembly automatically
         var fileUploadTask = new LargeFileUploadTask<DriveItem>(
             uploadSession, fileStream, maxSliceSize: 320 * 1024);
 
-        // Stage 3 — upload all slices
         var result = await fileUploadTask.UploadAsync();
 
         if (!result.UploadSucceeded || result.ItemResponse?.WebUrl is null)

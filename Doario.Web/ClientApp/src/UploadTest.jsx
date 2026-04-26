@@ -22,7 +22,12 @@ export default function UploadTest() {
         try {
             const response = await axios.post("/api/upload", form);
             setResult(response.data);
+
+            // Reset selection after successful upload
+            setFile(null);
             setPreview(null);
+            document.getElementById('file-picker').value = '';
+            document.getElementById('camera-capture').value = '';
         } catch (err) {
             setError(err.response?.data || "Upload failed");
         } finally {
@@ -55,7 +60,6 @@ export default function UploadTest() {
             <h2>Doario — Upload Document</h2>
             <p>Select a scanned document or take a photo to upload.</p>
 
-            {/* Standard file picker */}
             <input
                 id="file-picker"
                 type="file"
@@ -64,7 +68,6 @@ export default function UploadTest() {
                 style={{ display: "none" }}
             />
 
-            {/* Camera capture — opens camera on mobile */}
             <input
                 id="camera-capture"
                 type="file"

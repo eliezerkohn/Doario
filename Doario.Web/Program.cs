@@ -1,10 +1,9 @@
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
-using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.Identity.Web;
 using Microsoft.Identity.Web.UI;
-using Microsoft.Identity.Abstractions;
 using Microsoft.Graph;
 using Doario.Data;
+using Doario.Data.Repositories;
 using Microsoft.EntityFrameworkCore;
 using Doario.Web.Middleware;
 using Doario.Web.Services;
@@ -30,19 +29,21 @@ public class Program
                 builder.Configuration.GetSection("AzureAd").Bind(options);
                 options.TokenValidationParameters.RoleClaimType =
                     "http://schemas.microsoft.com/ws/2008/06/identity/claims/role";
-                options.Events = new Microsoft.AspNetCore.Authentication.OpenIdConnect.OpenIdConnectEvents
+                options.Events = new OpenIdConnectEvents
                 {
                     OnTokenValidated = ctx =>
                     {
                         var roleClaims = ctx.Principal.Claims
-                            .Where(c => c.Type == "http://schemas.microsoft.com/ws/2008/06/identity/claims/role"
-                                     || c.Type == "roles")
+                            .Where(c =>
+                                c.Type == "http://schemas.microsoft.com/ws/2008/06/identity/claims/role"
+                             || c.Type == "roles")
                             .Select(c => new Claim(ClaimTypes.Role, c.Value))
                             .ToList();
 
                         if (roleClaims.Any())
                         {
-                            var identity = ctx.Principal.Identity as System.Security.Claims.ClaimsIdentity;
+                            var identity = ctx.Principal.Identity
+                                as System.Security.Claims.ClaimsIdentity;
                             identity?.AddClaims(roleClaims);
                         }
                         return Task.CompletedTask;
@@ -52,7 +53,7 @@ public class Program
             .EnableTokenAcquisitionToCallDownstreamApi()
             .AddInMemoryTokenCaches();
 
-        // ── Microsoft Graph v5 — manual registration ──────────────────────────
+        // ── Microsoft Graph ───────────────────────────────────────────────────
         builder.Services.AddScoped<GraphServiceClient>(sp =>
         {
             var credential = new ClientSecretCredential(
@@ -71,51 +72,50 @@ public class Program
         // ── MVC + Identity UI ─────────────────────────────────────────────────
         builder.Services.AddControllersWithViews()
             .AddMicrosoftIdentityUI();
-
         builder.Services.AddRazorPages();
 
-        // ── Tenant Resolution ─────────────────────────────────────────────────
+        // ── Tenant resolution ─────────────────────────────────────────────────
         builder.Services.AddHttpContextAccessor();
         builder.Services.AddScoped<TenantContext>();
         builder.Services.AddScoped<TenantResolutionMiddleware>();
 
-        // ── OCR Service ───────────────────────────────────────────────────────
+        // ── Repositories ──────────────────────────────────────────────────────
+        builder.Services.AddScoped<IDocumentRepository, DocumentRepository>();
+        builder.Services.AddScoped<IAssignmentRepository, AssignmentRepository>();
+        builder.Services.AddScoped<IDeliveryRepository, DeliveryRepository>();
+        builder.Services.AddScoped<IStaffRepository, StaffRepository>();
+        builder.Services.AddScoped<ITenantRepository, TenantRepository>();
+
+        // ── Services ──────────────────────────────────────────────────────────
         builder.Services.Configure<OcrOptions>(
             builder.Configuration.GetSection("DocumentIntelligence"));
         builder.Services.AddScoped<OcrService>();
 
-        // ── SharePoint ────────────────────────────────────────────────────────
         builder.Services.Configure<SharePointOptions>(
             builder.Configuration.GetSection("SharePoint"));
         builder.Services.AddScoped<SharePointService>();
 
-        // ── AiSummaryService ──────────────────────────────────────────────────
         builder.Services.AddScoped<AiSummaryService>();
+        builder.Services.AddScoped<EmailDeliveryService>();
+        builder.Services.AddScoped<AssignmentService>();
 
         var app = builder.Build();
 
-
-
         // ── Pipeline ──────────────────────────────────────────────────────────
         if (!app.Environment.IsDevelopment())
-        {
             app.UseHsts();
-        }
 
         app.UseStaticFiles();
 
-        // ── SPA Dev Server ────────────────────────────────────────────────────
         if (app.Environment.IsDevelopment())
         {
             var psi = new System.Diagnostics.ProcessStartInfo
             {
                 FileName = "npm",
                 Arguments = "run dev",
-                WorkingDirectory = Path.Combine(
-                    Directory.GetCurrentDirectory(), "ClientApp"),
+                WorkingDirectory = Path.Combine(Directory.GetCurrentDirectory(), "ClientApp"),
                 UseShellExecute = true
             };
-
             var spaProcess = System.Diagnostics.Process.Start(psi);
             app.Lifetime.ApplicationStopping.Register(() =>
             {

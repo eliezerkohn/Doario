@@ -1,9 +1,7 @@
-﻿using Azure.AI.OpenAI;
-using Azure;
-using Doario.Data;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
+﻿using Azure;
+using Azure.AI.OpenAI;
 using OpenAI.Chat;
+using Doario.Data.Repositories;
 
 namespace Doario.Web.Services;
 
@@ -25,40 +23,49 @@ public class AiSummaryService
             try
             {
                 using var scope = _scopeFactory.CreateScope();
-                var db = scope.ServiceProvider.GetRequiredService<DoarioDataContext>();
+                var documents = scope.ServiceProvider.GetRequiredService<IDocumentRepository>();
 
-                var doc = await db.Documents.FirstOrDefaultAsync(d => d.DocumentId == documentId);
-                if (doc == null || string.IsNullOrWhiteSpace(doc.OcrText)) return;
+                var doc = await documents.GetByIdAsync(documentId);
+                if (doc is null || string.IsNullOrWhiteSpace(doc.OcrText)) return;
 
-                var endpoint = _config["AzureOpenAI:Endpoint"];
-                var apiKey = _config["AzureOpenAI:ApiKey"];
-                var deployment = _config["AzureOpenAI:DeploymentName"];
-
-                var client = new AzureOpenAIClient(new Uri(endpoint), new AzureKeyCredential(apiKey));
-                var chatClient = client.GetChatClient(deployment);
+                var client = new AzureOpenAIClient(
+                    new Uri(_config["AzureOpenAI:Endpoint"]),
+                    new AzureKeyCredential(_config["AzureOpenAI:ApiKey"]));
+                var chatClient = client.GetChatClient(_config["AzureOpenAI:DeploymentName"]);
 
                 var prompt = $"""
                     You are an assistant that summarises physical mail documents for office staff.
-                    
-                    Read the following OCR-extracted text from a scanned document and produce a clean, 
-                    professional summary. Include:
-                    - Document type (letter, form, invoice, etc.)
-                    - Sender name and contact details if present
-                    - Main purpose or subject of the document
-                    - Any action required or deadlines mentioned
-                    - Key details (names, dates, amounts, reference numbers)
-                    
-                    Keep it concise — maximum 150 words. Write in plain English.
-                    
+
+                    Read the following OCR text and produce a structured summary.
+                    Output exactly these five fields, each on its own line:
+
+                    <strong>Document Type:</strong> [type]
+                    <strong>Sender:</strong> [name and contact details, or "Not provided"]
+                    <strong>Purpose:</strong> [main subject]
+                    <strong>Action Required:</strong> [what needs to be done, or "None"]
+                    <strong>Key Details:</strong> [names, dates, amounts, reference numbers, or "None"]
+
+                    Rules:
+                    - Output only the five lines above, nothing else
+                    - No extra blank lines between fields
+                    - Use the <strong> tags exactly as shown — no markdown, no asterisks
+                    - Each value is one sentence maximum
+                    - Plain English only
+
                     OCR TEXT:
                     {doc.OcrText}
                     """;
 
-                var response = await chatClient.CompleteChatAsync(
-                    new UserChatMessage(prompt));
+                var response = await chatClient.CompleteChatAsync(new UserChatMessage(prompt));
+                var raw = response.Value.Content[0].Text.Trim();
 
-                doc.AiSummary = response.Value.Content[0].Text;
-                await db.SaveChangesAsync();
+                // Each field is on its own line — convert to <br> for HTML rendering
+                var html = raw
+                    .Replace("\r\n", "\n")
+                    .Replace("\r", "\n")
+                    .Replace("\n", "<br>");
+
+                await documents.UpdateAiSummaryAsync(documentId, html);
             }
             catch (Exception ex)
             {

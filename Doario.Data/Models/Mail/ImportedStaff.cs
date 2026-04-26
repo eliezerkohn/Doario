@@ -24,7 +24,10 @@ namespace Doario.Data.Models.Mail
         public string ExternalId { get; set; }
 
         [Required, MaxLength(200)]
-        public string FullName { get; set; }
+        public string FirstName { get; set; }
+
+        [Required, MaxLength(200)]
+        public string LastName { get; set; }
 
         [Required, MaxLength(200)]
         public string Email { get; set; }
@@ -67,7 +70,8 @@ namespace Doario.Data.Models.Mail
                 TenantId = tenantId,
                 SourceTypeId = 1,
                 ExternalId = "SYSTEM",
-                FullName = "System",
+                FirstName = "System",
+                LastName = "",
                 Email = "system@doario.com",
                 JobTitle = "Automated Process",
                 Department = "System",

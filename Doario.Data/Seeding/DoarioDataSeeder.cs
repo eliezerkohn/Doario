@@ -29,7 +29,10 @@ namespace Doario.Data.Seeding
                 new DocumentStatus { DocumentStatusId = 1, Name = "Unassigned", SortOrder = 100, StartDate = Epoch, EndDate = Never },
                 new DocumentStatus { DocumentStatusId = 2, Name = "Assigned", SortOrder = 200, StartDate = Epoch, EndDate = Never },
                 new DocumentStatus { DocumentStatusId = 3, Name = "Read", SortOrder = 300, StartDate = Epoch, EndDate = Never },
-                new DocumentStatus { DocumentStatusId = 4, Name = "Actioned", SortOrder = 400, StartDate = Epoch, EndDate = Never }
+                new DocumentStatus { DocumentStatusId = 4, Name = "Actioned", SortOrder = 400, StartDate = Epoch, EndDate = Never },
+                // Day 9
+                new DocumentStatus { DocumentStatusId = 5, Name = "OcrFailed", SortOrder = 500, StartDate = Epoch, EndDate = Never },
+                new DocumentStatus { DocumentStatusId = 6, Name = "EmailReceived", SortOrder = 600, StartDate = Epoch, EndDate = Never }
             );
         }
 
@@ -62,7 +65,10 @@ namespace Doario.Data.Seeding
                 new SourceType { SourceTypeId = 6, Name = "PowerSchoolAPI", SortOrder = 600, StartDate = Epoch, EndDate = Never },
                 new SourceType { SourceTypeId = 7, Name = "CustomDatabase", SortOrder = 700, StartDate = Epoch, EndDate = Never },
                 new SourceType { SourceTypeId = 8, Name = "CustomAPI", SortOrder = 800, StartDate = Epoch, EndDate = Never },
-                new SourceType { SourceTypeId = 9, Name = "VirtualMailroom", SortOrder = 900, StartDate = Epoch, EndDate = Never }
+                new SourceType { SourceTypeId = 9, Name = "VirtualMailroom", SortOrder = 900, StartDate = Epoch, EndDate = Never },
+                // Day 9
+                new SourceType { SourceTypeId = 10, Name = "Fax", SortOrder = 1000, StartDate = Epoch, EndDate = Never },
+                new SourceType { SourceTypeId = 11, Name = "Email", SortOrder = 1100, StartDate = Epoch, EndDate = Never }
             );
         }
 
@@ -90,7 +96,10 @@ namespace Doario.Data.Seeding
                 new MessageType { MessageTypeId = 5, Name = "AdminConfirmedViaOutlook", SortOrder = 500 },
                 new MessageType { MessageTypeId = 6, Name = "AdminReassignedViaOutlook", SortOrder = 600 },
                 new MessageType { MessageTypeId = 7, Name = "AdminMarkedUrgent", SortOrder = 700 },
-                new MessageType { MessageTypeId = 8, Name = "ViewedDocument", SortOrder = 800 }
+                new MessageType { MessageTypeId = 8, Name = "ViewedDocument", SortOrder = 800 },
+                // Day 9
+                new MessageType { MessageTypeId = 9, Name = "FaxReceived", SortOrder = 900 },
+                new MessageType { MessageTypeId = 10, Name = "EmailReceived", SortOrder = 1000 }
             );
         }
     }

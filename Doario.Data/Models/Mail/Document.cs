@@ -64,5 +64,8 @@ namespace Doario.Data.Models.Mail
         public string AiSummary { get; set; }
 
         public DateTime UploadedAt { get; set; } = DateTime.UtcNow;
+
+        [Required, MaxLength(500)]
+        public string OriginalFileName { get; set; }
     }
 }

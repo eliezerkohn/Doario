@@ -1,7 +1,6 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
-using Doario.Data;
+using Doario.Data.Repositories;
 using Doario.Web.Services;
 
 namespace Doario.Web.Controllers;
@@ -11,50 +10,37 @@ namespace Doario.Web.Controllers;
 [Authorize(Roles = "DoarioAdmin")]
 public class AdminController : ControllerBase
 {
-    private readonly DoarioDataContext _db;
+    private readonly IDocumentRepository _documents;
     private readonly TenantContext _tenant;
 
-    public AdminController(DoarioDataContext db, TenantContext tenant)
+    public AdminController(IDocumentRepository documents, TenantContext tenant)
     {
-        _db = db;
+        _documents = documents;
         _tenant = tenant;
     }
 
-    // GET /api/admin/queue
+    // GET /api/admin/queue?page=1&pageSize=50
     [HttpGet("queue")]
-    public async Task<IActionResult> GetQueue()
+    public async Task<IActionResult> GetQueue(int page = 1, int pageSize = 50)
     {
         if (!_tenant.IsResolved)
             return Unauthorized();
 
-        var docs = await _db.Documents
-            .Where(d => d.TenantId == _tenant.TenantId)
-            .OrderByDescending(d => d.UploadedAt)
-            .Take(50)
-            .Select(d => new
-            {
-                d.DocumentId,
-                d.UploadedAt,
-                d.OcrText,
-                StatusId = d.DocumentStatusId,
-                SenderId = d.SenderId,
-                d.AiSummary
-            })
-            .ToListAsync();
+        pageSize = Math.Min(pageSize, 500);
 
-        return Ok(docs);
-    }
+        var docs = await _documents.GetQueueAsync(_tenant.TenantId, page, pageSize);
 
-    [HttpGet("whoami")]
-    [AllowAnonymous]
-    public IActionResult WhoAmI()
-    {
-        return Ok(new
+        var result = docs.Select(d => new
         {
-            IsAuthenticated = User.Identity.IsAuthenticated,
-            Name = User.Identity.Name,
-            AuthType = User.Identity.AuthenticationType,
-            Claims = User.Claims.Select(c => new { c.Type, c.Value })
+            d.DocumentId,
+            d.UploadedAt,
+            d.OcrText,
+            StatusId = d.DocumentStatusId,
+            StatusName = d.DocumentStatus.Name,
+            d.AiSummary,
+            d.OriginalFileName
         });
+
+        return Ok(result);
     }
 }

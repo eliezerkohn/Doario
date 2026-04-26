@@ -1,8 +1,7 @@
-﻿using Doario.Data;
-using Doario.Data.Models.Mail;
+﻿using Doario.Data.Models.Mail;
+using Doario.Data.Repositories;
 using Doario.Web.Services;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 
 namespace Doario.Web.Controllers;
 
@@ -11,22 +10,25 @@ namespace Doario.Web.Controllers;
 public class UploadController : ControllerBase
 {
     private readonly SharePointService _sharePoint;
-    private readonly DoarioDataContext _db;
+    private readonly ITenantRepository _tenants;
+    private readonly IDocumentRepository _documents;
     private readonly TenantContext _tenantContext;
-    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly OcrService _ocrService;
     private readonly ILogger<UploadController> _logger;
 
     public UploadController(
         SharePointService sharePoint,
-        DoarioDataContext db,
+        ITenantRepository tenants,
+        IDocumentRepository documents,
         TenantContext tenantContext,
-        IServiceScopeFactory scopeFactory,
+        OcrService ocrService,
         ILogger<UploadController> logger)
     {
         _sharePoint = sharePoint;
-        _db = db;
+        _tenants = tenants;
+        _documents = documents;
         _tenantContext = tenantContext;
-        _scopeFactory = scopeFactory;
+        _ocrService = ocrService;
         _logger = logger;
     }
 
@@ -39,9 +41,7 @@ public class UploadController : ControllerBase
         if (!_tenantContext.IsResolved)
             return Unauthorized("Tenant could not be identified.");
 
-        var tenant = await _db.Tenants
-            .FirstOrDefaultAsync(t => t.TenantId == _tenantContext.TenantId);
-
+        var tenant = await _tenants.GetByIdAsync(_tenantContext.TenantId);
         if (tenant is null)
             return Unauthorized("Tenant not found.");
 
@@ -56,7 +56,7 @@ public class UploadController : ControllerBase
         {
             DocumentId = Guid.NewGuid(),
             TenantId = _tenantContext.TenantId,
-            DocumentStatusId = 1,
+            DocumentStatusId = 1, // Unassigned
             SenderTypeId = tenant.UnknownSenderTypeId,
             SenderId = tenant.UnknownSenderId,
             UploadedByStaffId = tenant.SystemStaffId,
@@ -65,26 +65,18 @@ public class UploadController : ControllerBase
             SenderDisplayName = string.Empty,
             SenderEmail = string.Empty,
             SenderMatchConfidence = 0,
-            UploadedAt = DateTime.UtcNow
+            UploadedAt = DateTime.UtcNow,
+            OriginalFileName = file.FileName
         };
 
-        _db.Documents.Add(document);
-        await _db.SaveChangesAsync();
+        await _documents.CreateAsync(document);
 
         _logger.LogInformation(
             "Document {DocumentId} created for tenant {TenantId}.",
             document.DocumentId, _tenantContext.TenantId);
 
-        // Fire OCR using IServiceScopeFactory — singleton, never disposed
-        var documentId = document.DocumentId;
-        var scopeFactory = _scopeFactory;
-        _ = Task.Run(async () =>
-        {
-            await Task.Delay(500);
-            using var scope = scopeFactory.CreateScope();
-            var ocrService = scope.ServiceProvider.GetRequiredService<OcrService>();
-            await ocrService.RunOcrAsync(documentId);
-        });
+        // Fire OCR in background
+        _ocrService.RunInBackground(document.DocumentId);
 
         return Ok(new
         {

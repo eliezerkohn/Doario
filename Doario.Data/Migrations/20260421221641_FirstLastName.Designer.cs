@@ -4,6 +4,7 @@ using Doario.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Doario.Data.Migrations
 {
     [DbContext(typeof(DoarioDataContext))]
-    partial class DoarioDataContextModelSnapshot : ModelSnapshot
+    [Migration("20260421221641_FirstLastName")]
+    partial class FirstLastName
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -115,22 +118,6 @@ namespace Doario.Data.Migrations
                             Name = "Actioned",
                             SortOrder = 400,
                             StartDate = new DateTime(2025, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc)
-                        },
-                        new
-                        {
-                            DocumentStatusId = 5,
-                            EndDate = new DateTime(9999, 12, 31, 0, 0, 0, 0, DateTimeKind.Utc),
-                            Name = "OcrFailed",
-                            SortOrder = 500,
-                            StartDate = new DateTime(2025, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc)
-                        },
-                        new
-                        {
-                            DocumentStatusId = 6,
-                            EndDate = new DateTime(9999, 12, 31, 0, 0, 0, 0, DateTimeKind.Utc),
-                            Name = "EmailReceived",
-                            SortOrder = 600,
-                            StartDate = new DateTime(2025, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc)
                         });
                 });
 
@@ -202,18 +189,6 @@ namespace Doario.Data.Migrations
                             MessageTypeId = 8,
                             Name = "ViewedDocument",
                             SortOrder = 800
-                        },
-                        new
-                        {
-                            MessageTypeId = 9,
-                            Name = "FaxReceived",
-                            SortOrder = 900
-                        },
-                        new
-                        {
-                            MessageTypeId = 10,
-                            Name = "EmailReceived",
-                            SortOrder = 1000
                         });
                 });
 
@@ -454,22 +429,6 @@ namespace Doario.Data.Migrations
                             EndDate = new DateTime(9999, 12, 31, 0, 0, 0, 0, DateTimeKind.Utc),
                             Name = "VirtualMailroom",
                             SortOrder = 900,
-                            StartDate = new DateTime(2025, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc)
-                        },
-                        new
-                        {
-                            SourceTypeId = 10,
-                            EndDate = new DateTime(9999, 12, 31, 0, 0, 0, 0, DateTimeKind.Utc),
-                            Name = "Fax",
-                            SortOrder = 1000,
-                            StartDate = new DateTime(2025, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc)
-                        },
-                        new
-                        {
-                            SourceTypeId = 11,
-                            EndDate = new DateTime(9999, 12, 31, 0, 0, 0, 0, DateTimeKind.Utc),
-                            Name = "Email",
-                            SortOrder = 1100,
                             StartDate = new DateTime(2025, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc)
                         });
                 });
