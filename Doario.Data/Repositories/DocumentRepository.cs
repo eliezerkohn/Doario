@@ -35,6 +35,12 @@ public class DocumentRepository : IDocumentRepository
             .Take(pageSize)
             .ToListAsync();
 
+    public async Task<int> GetMonthlyCountAsync(Guid tenantId, int year, int month)
+        => await _db.Documents
+            .CountAsync(d => d.TenantId == tenantId
+                          && d.UploadedAt.Year == year
+                          && d.UploadedAt.Month == month);
+
     public async Task UpdateStatusAsync(Guid documentId, int statusId)
     {
         var doc = await _db.Documents.FindAsync(documentId);

@@ -67,5 +67,24 @@ namespace Doario.Data.Models.Mail
 
         [Required, MaxLength(500)]
         public string OriginalFileName { get; set; }
+
+        /// <summary>
+        /// Groups pages that were scanned together in one batch.
+        /// All documents split from the same scan share the same BatchScanId.
+        /// Null for documents uploaded individually.
+        /// </summary>
+        public Guid? BatchScanId { get; set; }
+
+        /// <summary>
+        /// First page of this document within the original batch scan.
+        /// e.g. if this document was pages 3-5 of a 20 page scan, BatchPageStart = 3.
+        /// </summary>
+        public int? BatchPageStart { get; set; }
+
+        /// <summary>
+        /// Last page of this document within the original batch scan.
+        /// e.g. if this document was pages 3-5 of a 20 page scan, BatchPageEnd = 5.
+        /// </summary>
+        public int? BatchPageEnd { get; set; }
     }
 }

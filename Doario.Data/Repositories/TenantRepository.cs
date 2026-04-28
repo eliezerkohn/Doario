@@ -24,6 +24,17 @@ public class TenantRepository : ITenantRepository
         await _db.SaveChangesAsync();
     }
 
+    public async Task<Tenant> GetByApiKeyAsync(string rawKey)
+    {
+        var hash = Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(
+                System.Text.Encoding.UTF8.GetBytes(rawKey)))
+            .ToLower();
+
+        return await _db.Tenants
+            .FirstOrDefaultAsync(t => t.ApiKeyHash == hash);
+    }
+
     public async Task SaveAsync()
         => await _db.SaveChangesAsync();
 }

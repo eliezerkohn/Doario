@@ -1,9 +1,5 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 using Doario.Data.Models.Lookups;
 using Doario.Data.Models.SaaS;
@@ -24,8 +20,7 @@ namespace Doario.Data.Models.Mail
         public DocumentAssignment DocumentAssignment { get; set; }
 
         /// <summary>
-        /// Defaults to Pending=7 on insert.
-        /// Updated to Sent=8 on success or Failed=5 on error.
+        /// 7 = Pending, 8 = Sent, 5 = Failed, 9 = PermanentFail
         /// </summary>
         public int SystemStatusId { get; set; } = 7;
         public SystemStatus SystemStatus { get; set; }
@@ -39,6 +34,8 @@ namespace Doario.Data.Models.Mail
         public string ErrorMessage { get; set; }
 
         public int RetryCount { get; set; } = 0;
+
+        public DateTime? LastRetryAt { get; set; }
 
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     }

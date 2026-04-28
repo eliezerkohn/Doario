@@ -31,20 +31,16 @@ public class AssignmentController : ControllerBase
     [HttpGet("staff")]
     public async Task<IActionResult> GetStaff()
     {
-        if (!_tenant.IsResolved)
-            return Unauthorized();
+        if (!_tenant.IsResolved) return Unauthorized();
 
         var staff = await _staff.GetAllForTenantAsync(_tenant.TenantId);
-
-        var result = staff.Select(s => new
-        {
+        var result = staff.Select(s => new {
             s.ImportedStaffId,
             s.FirstName,
             s.LastName,
             s.Email,
             s.IsAdmin
         });
-
         return Ok(result);
     }
 
@@ -52,12 +48,11 @@ public class AssignmentController : ControllerBase
     [HttpPost("assign")]
     public async Task<IActionResult> Assign([FromBody] AssignRequest request)
     {
-        if (!_tenant.IsResolved)
-            return Unauthorized();
+        if (!_tenant.IsResolved) return Unauthorized();
 
         var userEmail = User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value
-                     ?? User.FindFirst("preferred_username")?.Value
-                     ?? string.Empty;
+                      ?? User.FindFirst("preferred_username")?.Value
+                      ?? string.Empty;
 
         var adminStaff = await _staff.GetByEmailAsync(userEmail, _tenant.TenantId);
         if (adminStaff is null)
@@ -70,9 +65,7 @@ public class AssignmentController : ControllerBase
             tenantId: _tenant.TenantId,
             note: request.Note ?? string.Empty);
 
-        if (!success)
-            return BadRequest(new { error });
-
+        if (!success) return BadRequest(new { error });
         return Ok(new { message = "Document assigned successfully." });
     }
 
@@ -80,12 +73,10 @@ public class AssignmentController : ControllerBase
     [HttpGet("{documentId:guid}")]
     public async Task<IActionResult> GetAssignment(Guid documentId)
     {
-        if (!_tenant.IsResolved)
-            return Unauthorized();
+        if (!_tenant.IsResolved) return Unauthorized();
 
         var assignment = await _assignments.GetByDocumentAsync(documentId, _tenant.TenantId);
-        if (assignment is null)
-            return Ok(null);
+        if (assignment is null) return Ok(null);
 
         return Ok(new
         {
@@ -95,6 +86,39 @@ public class AssignmentController : ControllerBase
             assignment.AssignedAt,
             assignment.Note
         });
+    }
+
+    // GET /api/assignment/by-email?email=sarah@specialtyrx.com
+    // Returns ALL documents ever assigned to this email — every status
+    [HttpGet("by-email")]
+    public async Task<IActionResult> GetByEmail([FromQuery] string email)
+    {
+        if (!_tenant.IsResolved) return Unauthorized();
+
+        if (string.IsNullOrWhiteSpace(email))
+            return BadRequest(new { error = "Email is required." });
+
+        var assignments = await _assignments.GetByEmailAsync(email, _tenant.TenantId);
+
+        var result = assignments.Select(a => new {
+            a.DocumentId,
+            a.Document.UploadedAt,
+            a.Document.OriginalFileName,
+            a.Document.SharePointUrl,
+            a.Document.SenderDisplayName,
+            a.Document.SenderEmail,
+            a.Document.AiSummary,
+            a.Document.OcrText,
+            StatusId = a.Document.DocumentStatusId,
+            StatusName = a.Document.DocumentStatus.Name,
+            a.AssignedAt,
+            a.AssignedToEmail,
+            AssignedToName = $"{a.AssignedToStaff.FirstName} {a.AssignedToStaff.LastName}",
+            a.Note,
+            IsViewed = false  // search results always fresh — no viewed state
+        });
+
+        return Ok(result);
     }
 }
 

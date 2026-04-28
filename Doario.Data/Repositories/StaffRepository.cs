@@ -25,4 +25,32 @@ public class StaffRepository : IStaffRepository
             .OrderBy(s => s.LastName)
             .ThenBy(s => s.FirstName)
             .ToListAsync();
+
+    public async Task AddAsync(ImportedStaff staff)
+        => await _db.ImportedStaff.AddAsync(staff);
+
+    public async Task SaveAsync()
+        => await _db.SaveChangesAsync();
+
+    public async Task UpsertRangeAsync(List<ImportedStaff> staff)
+    {
+        foreach (var s in staff)
+        {
+            var existing = await _db.ImportedStaff
+                .FirstOrDefaultAsync(x => x.Email == s.Email && x.TenantId == s.TenantId);
+
+            if (existing == null)
+                await _db.ImportedStaff.AddAsync(s);
+            else
+            {
+                existing.FirstName = s.FirstName;
+                existing.LastName = s.LastName;
+                existing.JobTitle = s.JobTitle;
+                existing.Department = s.Department;
+                existing.Source = s.Source;
+                existing.UpdatedAt = DateTime.UtcNow;
+            }
+        }
+        await _db.SaveChangesAsync();
+    }
 }

@@ -12,6 +12,7 @@ public interface IDocumentRepository
     Task<Document> GetByIdWithTenantAsync(Guid documentId, Guid tenantId);
 
     Task<List<Document>> GetQueueAsync(Guid tenantId, int page, int pageSize);
+    Task<int> GetMonthlyCountAsync(Guid tenantId, int year, int month);
     Task UpdateStatusAsync(Guid documentId, int statusId);
     Task UpdateOcrTextAsync(Guid documentId, string ocrText);
     Task UpdateAiSummaryAsync(Guid documentId, string aiSummary);

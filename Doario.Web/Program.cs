@@ -85,6 +85,12 @@ public class Program
         builder.Services.AddScoped<IDeliveryRepository, DeliveryRepository>();
         builder.Services.AddScoped<IStaffRepository, StaffRepository>();
         builder.Services.AddScoped<ITenantRepository, TenantRepository>();
+        builder.Services.AddScoped<ISubscriptionRepository, SubscriptionRepository>();
+        builder.Services.AddScoped<ISubscriptionPlanRepository, SubscriptionPlanRepository>();
+        builder.Services.AddScoped<IDocumentFeedbackRepository, DocumentFeedbackRepository>();
+        builder.Services.AddScoped<ITenantWhitelistedSenderRepository, TenantWhitelistedSenderRepository>();
+        builder.Services.AddScoped<IErrorLogRepository, ErrorLogRepository>();
+        builder.Services.AddScoped<IDocumentViewedRepository, DocumentViewedRepository>();
 
         // ── Services ──────────────────────────────────────────────────────────
         builder.Services.Configure<OcrOptions>(
@@ -98,6 +104,10 @@ public class Program
         builder.Services.AddScoped<AiSummaryService>();
         builder.Services.AddScoped<EmailDeliveryService>();
         builder.Services.AddScoped<AssignmentService>();
+        builder.Services.AddScoped<StaffSyncService>();
+        builder.Services.AddScoped<StaffCsvService>();
+
+        builder.Services.AddScoped<ApiKeyService>();
 
         var app = builder.Build();
 

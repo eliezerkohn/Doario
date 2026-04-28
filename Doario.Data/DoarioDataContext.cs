@@ -10,13 +10,9 @@ public class DoarioDataContext : DbContext
 {
     private readonly string _connectionString;
 
-    // Used at runtime by ASP.NET Core dependency injection
     public DoarioDataContext(DbContextOptions<DoarioDataContext> options)
-        : base(options)
-    {
-    }
+        : base(options) { }
 
-    // Used by EF Core tools (migrations) via DoarioDataContextFactory
     public DoarioDataContext(string connectionString)
     {
         _connectionString = connectionString;
@@ -24,9 +20,6 @@ public class DoarioDataContext : DbContext
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
-        // Only configure manually if not already configured
-        // i.e. when called from the factory with a connection string
-        // When called by ASP.NET Core it is already configured — skip this
         if (!optionsBuilder.IsConfigured)
             optionsBuilder.UseSqlServer(_connectionString);
     }
@@ -38,6 +31,7 @@ public class DoarioDataContext : DbContext
     public DbSet<DocumentUsage> DocumentUsages { get; set; }
     public DbSet<StaffSyncLog> StaffSyncLogs { get; set; }
     public DbSet<TenantConnectorConfig> TenantConnectorConfigs { get; set; }
+    public DbSet<SubscriptionPlan> SubscriptionPlans { get; set; }  // ← NEW
 
     // Lookups
     public DbSet<DocumentStatus> DocumentStatuses { get; set; }
@@ -56,6 +50,10 @@ public class DoarioDataContext : DbContext
     public DbSet<ImportedStaff> ImportedStaff { get; set; }
     public DbSet<ImportedSender> ImportedSenders { get; set; }
     public DbSet<DocumentMessage> DocumentMessages { get; set; }
+    public DbSet<DocumentFeedback> DocumentFeedbacks { get; set; }
+    public DbSet<TenantWhitelistedSender> TenantWhitelistedSenders { get; set; }
+    public DbSet<ErrorLog> ErrorLogs { get; set; }
+    public DbSet<DocumentViewed> DocumentVieweds { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -65,43 +63,47 @@ public class DoarioDataContext : DbContext
             relationship.DeleteBehavior = DeleteBehavior.Restrict;
         }
 
-        // Tenant
         modelBuilder.Entity<Tenant>()
             .HasIndex(t => t.Domain)
             .IsUnique();
 
-        // TenantSubscription
+        // ── TenantSubscription ───────────────────────────────────────
         modelBuilder.Entity<TenantSubscription>()
-            .Property(t => t.MonthlyPrice)
-            .HasPrecision(18, 2);
-
+            .Property(t => t.MonthlyPrice).HasPrecision(18, 2);
         modelBuilder.Entity<TenantSubscription>()
-            .Property(t => t.ExtraDocumentPrice)
-            .HasPrecision(18, 2);
-
+            .Property(t => t.ExtraDocumentPrice).HasPrecision(18, 4);  // 4dp for extra doc price
         modelBuilder.Entity<TenantSubscription>()
-            .Property(t => t.DiscountPercent)
-            .HasPrecision(5, 2);
+            .Property(t => t.DiscountPercent).HasPrecision(5, 2);
+        modelBuilder.Entity<TenantSubscription>()
+            .Property(d => d.PricePerStaff).HasPrecision(18, 2);
+        modelBuilder.Entity<TenantSubscription>()
+            .HasOne(ts => ts.SubscriptionPlan)
+            .WithMany()
+            .HasForeignKey(ts => ts.SubscriptionPlanId)
+            .OnDelete(DeleteBehavior.Restrict);                         // ← NEW FK
 
+        // ── SubscriptionPlan ─────────────────────────────────────────
+        modelBuilder.Entity<SubscriptionPlan>()
+            .Property(p => p.MonthlyPrice).HasPrecision(18, 2);
+        modelBuilder.Entity<SubscriptionPlan>()
+            .Property(p => p.ExtraDocumentPrice).HasPrecision(18, 4);  // ← NEW
+
+        // ── Document ─────────────────────────────────────────────────
         modelBuilder.Entity<ImportedStaff>().ToTable("ImportedStaff");
 
         modelBuilder.Entity<Document>()
-    .Property(d => d.SenderMatchConfidence)
-    .HasPrecision(5, 2);
+            .Property(d => d.SenderMatchConfidence).HasPrecision(5, 2);
 
         modelBuilder.Entity<DocumentAssignment>()
-            .Property(d => d.AIConfidence)
-            .HasPrecision(5, 2);
+            .Property(d => d.AIConfidence).HasPrecision(5, 2);
 
+        // ── DocumentUsage ────────────────────────────────────────────
         modelBuilder.Entity<DocumentUsage>()
             .Property(d => d.ExtraCharges).HasPrecision(18, 2);
         modelBuilder.Entity<DocumentUsage>()
             .Property(d => d.MonthlyPrice).HasPrecision(18, 2);
         modelBuilder.Entity<DocumentUsage>()
             .Property(d => d.TotalCharged).HasPrecision(18, 2);
-
-        modelBuilder.Entity<TenantSubscription>()
-            .Property(d => d.PricePerStaff).HasPrecision(18, 2);
 
         DoarioDataSeeder.Seed(modelBuilder);
     }

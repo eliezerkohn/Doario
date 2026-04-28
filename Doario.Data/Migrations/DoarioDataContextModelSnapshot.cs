@@ -131,6 +131,22 @@ namespace Doario.Data.Migrations
                             Name = "EmailReceived",
                             SortOrder = 600,
                             StartDate = new DateTime(2025, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc)
+                        },
+                        new
+                        {
+                            DocumentStatusId = 7,
+                            EndDate = new DateTime(9999, 12, 31, 0, 0, 0, 0, DateTimeKind.Utc),
+                            Name = "Spam",
+                            SortOrder = 700,
+                            StartDate = new DateTime(2025, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc)
+                        },
+                        new
+                        {
+                            DocumentStatusId = 8,
+                            EndDate = new DateTime(9999, 12, 31, 0, 0, 0, 0, DateTimeKind.Utc),
+                            Name = "Promotion",
+                            SortOrder = 800,
+                            StartDate = new DateTime(2025, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc)
                         });
                 });
 
@@ -471,6 +487,14 @@ namespace Doario.Data.Migrations
                             Name = "Email",
                             SortOrder = 1100,
                             StartDate = new DateTime(2025, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc)
+                        },
+                        new
+                        {
+                            SourceTypeId = 12,
+                            EndDate = new DateTime(9999, 12, 31, 0, 0, 0, 0, DateTimeKind.Utc),
+                            Name = "Scanner",
+                            SortOrder = 1200,
+                            StartDate = new DateTime(2025, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc)
                         });
                 });
 
@@ -568,6 +592,14 @@ namespace Doario.Data.Migrations
                             Name = "Sent",
                             SortOrder = 800,
                             StartDate = new DateTime(2025, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc)
+                        },
+                        new
+                        {
+                            SystemStatusId = 9,
+                            EndDate = new DateTime(9999, 12, 31, 0, 0, 0, 0, DateTimeKind.Utc),
+                            Name = "PermanentFail",
+                            SortOrder = 900,
+                            StartDate = new DateTime(2025, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc)
                         });
                 });
 
@@ -579,6 +611,15 @@ namespace Doario.Data.Migrations
 
                     b.Property<string>("AiSummary")
                         .HasColumnType("nvarchar(max)");
+
+                    b.Property<int?>("BatchPageEnd")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("BatchPageStart")
+                        .HasColumnType("int");
+
+                    b.Property<Guid?>("BatchScanId")
+                        .HasColumnType("uniqueidentifier");
 
                     b.Property<int>("DocumentStatusId")
                         .HasColumnType("int");
@@ -732,6 +773,9 @@ namespace Doario.Data.Migrations
                         .HasMaxLength(2000)
                         .HasColumnType("nvarchar(2000)");
 
+                    b.Property<DateTime?>("LastRetryAt")
+                        .HasColumnType("datetime2");
+
                     b.Property<int>("RetryCount")
                         .HasColumnType("int");
 
@@ -760,6 +804,44 @@ namespace Doario.Data.Migrations
                     b.HasIndex("TenantId");
 
                     b.ToTable("DocumentDeliveries");
+                });
+
+            modelBuilder.Entity("Doario.Data.Models.Mail.DocumentFeedback", b =>
+                {
+                    b.Property<Guid>("DocumentFeedbackId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("AiClassification")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("CorrectedClassification")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("DocumentId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("DocumentSnippet")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("DocumentFeedbackId");
+
+                    b.HasIndex("DocumentId");
+
+                    b.HasIndex("TenantId");
+
+                    b.ToTable("DocumentFeedbacks");
                 });
 
             modelBuilder.Entity("Doario.Data.Models.Mail.DocumentMessage", b =>
@@ -798,6 +880,69 @@ namespace Doario.Data.Migrations
                     b.HasIndex("TenantId");
 
                     b.ToTable("DocumentMessages");
+                });
+
+            modelBuilder.Entity("Doario.Data.Models.Mail.DocumentViewed", b =>
+                {
+                    b.Property<Guid>("DocumentViewedId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("DocumentId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("ViewedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("ViewedByStaffId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("DocumentViewedId");
+
+                    b.HasIndex("DocumentId");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("ViewedByStaffId");
+
+                    b.ToTable("DocumentVieweds");
+                });
+
+            modelBuilder.Entity("Doario.Data.Models.Mail.ErrorLog", b =>
+                {
+                    b.Property<Guid>("ErrorLogId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid?>("DocumentId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("ErrorType")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("Message")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
+                    b.Property<string>("StackTrace")
+                        .HasMaxLength(8000)
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("ErrorLogId");
+
+                    b.ToTable("ErrorLogs");
                 });
 
             modelBuilder.Entity("Doario.Data.Models.Mail.ImportedSender", b =>
@@ -858,6 +1003,9 @@ namespace Doario.Data.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
                     b.Property<string>("Department")
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
@@ -867,26 +1015,15 @@ namespace Doario.Data.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
 
-                    b.Property<string>("EmployeeId")
+                    b.Property<string>("FirstName")
+                        .IsRequired()
                         .HasMaxLength(100)
                         .HasColumnType("nvarchar(100)");
 
-                    b.Property<DateTime>("EndDate")
-                        .HasColumnType("datetime2");
-
-                    b.Property<string>("ExternalId")
-                        .HasMaxLength(200)
-                        .HasColumnType("nvarchar(200)");
-
-                    b.Property<string>("FirstName")
-                        .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("nvarchar(200)");
-
-                    b.Property<bool>("IsAdmin")
+                    b.Property<bool>("IsActive")
                         .HasColumnType("bit");
 
-                    b.Property<bool>("IsAdminOverridden")
+                    b.Property<bool>("IsAdmin")
                         .HasColumnType("bit");
 
                     b.Property<string>("JobTitle")
@@ -895,18 +1032,46 @@ namespace Doario.Data.Migrations
 
                     b.Property<string>("LastName")
                         .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("nvarchar(200)");
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
 
-                    b.Property<DateTime>("LastSyncedAt")
+                    b.Property<string>("Source")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("datetime2");
 
-                    b.Property<string>("OfficeLocation")
+                    b.HasKey("ImportedStaffId");
+
+                    b.HasIndex("TenantId");
+
+                    b.ToTable("ImportedStaff", (string)null);
+                });
+
+            modelBuilder.Entity("Doario.Data.Models.Mail.TenantWhitelistedSender", b =>
+                {
+                    b.Property<Guid>("TenantWhitelistedSenderId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("EndDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("SenderIdentifier")
+                        .IsRequired()
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
 
-                    b.Property<int>("SourceTypeId")
-                        .HasColumnType("int");
+                    b.Property<string>("Source")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
 
                     b.Property<DateTime>("StartDate")
                         .HasColumnType("datetime2");
@@ -914,13 +1079,11 @@ namespace Doario.Data.Migrations
                     b.Property<Guid>("TenantId")
                         .HasColumnType("uniqueidentifier");
 
-                    b.HasKey("ImportedStaffId");
-
-                    b.HasIndex("SourceTypeId");
+                    b.HasKey("TenantWhitelistedSenderId");
 
                     b.HasIndex("TenantId");
 
-                    b.ToTable("ImportedStaff", (string)null);
+                    b.ToTable("TenantWhitelistedSenders");
                 });
 
             modelBuilder.Entity("Doario.Data.Models.SaaS.DocumentUsage", b =>
@@ -1023,11 +1186,116 @@ namespace Doario.Data.Migrations
                     b.ToTable("StaffSyncLogs");
                 });
 
+            modelBuilder.Entity("Doario.Data.Models.SaaS.SubscriptionPlan", b =>
+                {
+                    b.Property<Guid>("SubscriptionPlanId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<DateTime>("EndDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<decimal>("ExtraDocumentPrice")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<int>("IncludedDocuments")
+                        .HasColumnType("int");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("IsPublic")
+                        .HasColumnType("bit");
+
+                    b.Property<decimal>("MonthlyPrice")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("StartDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("StripePriceId")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.HasKey("SubscriptionPlanId");
+
+                    b.ToTable("SubscriptionPlans");
+
+                    b.HasData(
+                        new
+                        {
+                            SubscriptionPlanId = new Guid("b1000000-0001-0001-0001-000000000001"),
+                            Description = "Perfect for small offices with low mail volume.",
+                            EndDate = new DateTime(9999, 12, 31, 0, 0, 0, 0, DateTimeKind.Utc),
+                            ExtraDocumentPrice = 1.00m,
+                            IncludedDocuments = 50,
+                            IsActive = true,
+                            IsPublic = true,
+                            MonthlyPrice = 49.00m,
+                            Name = "Starter",
+                            SortOrder = 100,
+                            StartDate = new DateTime(2025, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc),
+                            StripePriceId = ""
+                        },
+                        new
+                        {
+                            SubscriptionPlanId = new Guid("b1000000-0002-0002-0002-000000000002"),
+                            Description = "For growing teams handling moderate mail volume.",
+                            EndDate = new DateTime(9999, 12, 31, 0, 0, 0, 0, DateTimeKind.Utc),
+                            ExtraDocumentPrice = 0.70m,
+                            IncludedDocuments = 300,
+                            IsActive = true,
+                            IsPublic = true,
+                            MonthlyPrice = 129.00m,
+                            Name = "Growth",
+                            SortOrder = 200,
+                            StartDate = new DateTime(2025, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc),
+                            StripePriceId = ""
+                        },
+                        new
+                        {
+                            SubscriptionPlanId = new Guid("b1000000-0003-0003-0003-000000000003"),
+                            Description = "For high-volume mail rooms processing hundreds of documents.",
+                            EndDate = new DateTime(9999, 12, 31, 0, 0, 0, 0, DateTimeKind.Utc),
+                            ExtraDocumentPrice = 0.50m,
+                            IncludedDocuments = 600,
+                            IsActive = true,
+                            IsPublic = true,
+                            MonthlyPrice = 249.00m,
+                            Name = "Business",
+                            SortOrder = 300,
+                            StartDate = new DateTime(2025, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc),
+                            StripePriceId = ""
+                        });
+                });
+
             modelBuilder.Entity("Doario.Data.Models.SaaS.Tenant", b =>
                 {
                     b.Property<Guid>("TenantId")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("ApiKeyHash")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("ApiKeyPrefix")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
 
                     b.Property<string>("AzureClientId")
                         .HasColumnType("nvarchar(max)");
@@ -1248,8 +1516,8 @@ namespace Doario.Data.Migrations
                         .HasColumnType("datetime2");
 
                     b.Property<decimal>("ExtraDocumentPrice")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("decimal(18,2)");
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
 
                     b.Property<int>("IncludedDocuments")
                         .HasColumnType("int");
@@ -1280,10 +1548,15 @@ namespace Doario.Data.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("nvarchar(100)");
 
+                    b.Property<Guid?>("SubscriptionPlanId")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<Guid>("TenantId")
                         .HasColumnType("uniqueidentifier");
 
                     b.HasKey("TenantSubscriptionId");
+
+                    b.HasIndex("SubscriptionPlanId");
 
                     b.HasIndex("TenantId");
 
@@ -1433,6 +1706,25 @@ namespace Doario.Data.Migrations
                     b.Navigation("Tenant");
                 });
 
+            modelBuilder.Entity("Doario.Data.Models.Mail.DocumentFeedback", b =>
+                {
+                    b.HasOne("Doario.Data.Models.Mail.Document", "Document")
+                        .WithMany()
+                        .HasForeignKey("DocumentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Doario.Data.Models.SaaS.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Document");
+
+                    b.Navigation("Tenant");
+                });
+
             modelBuilder.Entity("Doario.Data.Models.Mail.DocumentMessage", b =>
                 {
                     b.HasOne("Doario.Data.Models.Mail.Document", "Document")
@@ -1468,6 +1760,33 @@ namespace Doario.Data.Migrations
                     b.Navigation("Tenant");
                 });
 
+            modelBuilder.Entity("Doario.Data.Models.Mail.DocumentViewed", b =>
+                {
+                    b.HasOne("Doario.Data.Models.Mail.Document", "Document")
+                        .WithMany()
+                        .HasForeignKey("DocumentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Doario.Data.Models.SaaS.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Doario.Data.Models.Mail.ImportedStaff", "ViewedByStaff")
+                        .WithMany()
+                        .HasForeignKey("ViewedByStaffId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Document");
+
+                    b.Navigation("Tenant");
+
+                    b.Navigation("ViewedByStaff");
+                });
+
             modelBuilder.Entity("Doario.Data.Models.Mail.ImportedSender", b =>
                 {
                     b.HasOne("Doario.Data.Models.Lookups.SenderType", "SenderType")
@@ -1497,19 +1816,22 @@ namespace Doario.Data.Migrations
 
             modelBuilder.Entity("Doario.Data.Models.Mail.ImportedStaff", b =>
                 {
-                    b.HasOne("Doario.Data.Models.Lookups.SourceType", "SourceType")
-                        .WithMany()
-                        .HasForeignKey("SourceTypeId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
                     b.HasOne("Doario.Data.Models.SaaS.Tenant", "Tenant")
                         .WithMany()
                         .HasForeignKey("TenantId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
-                    b.Navigation("SourceType");
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("Doario.Data.Models.Mail.TenantWhitelistedSender", b =>
+                {
+                    b.HasOne("Doario.Data.Models.SaaS.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
 
                     b.Navigation("Tenant");
                 });
@@ -1616,11 +1938,18 @@ namespace Doario.Data.Migrations
 
             modelBuilder.Entity("Doario.Data.Models.SaaS.TenantSubscription", b =>
                 {
+                    b.HasOne("Doario.Data.Models.SaaS.SubscriptionPlan", "SubscriptionPlan")
+                        .WithMany()
+                        .HasForeignKey("SubscriptionPlanId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("Doario.Data.Models.SaaS.Tenant", "Tenant")
                         .WithMany("Subscriptions")
                         .HasForeignKey("TenantId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+
+                    b.Navigation("SubscriptionPlan");
 
                     b.Navigation("Tenant");
                 });

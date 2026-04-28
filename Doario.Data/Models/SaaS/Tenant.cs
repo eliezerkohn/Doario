@@ -73,6 +73,23 @@ namespace Doario.Data.Models.SaaS
         public DateTime StartDate { get; set; } = DateTime.UtcNow;
         public DateTime EndDate { get; set; } = DateTime.MaxValue;
 
+        /// <summary>
+        /// API key used by DoarioScan Bridge and DoarioSync to authenticate
+        /// ingest requests without requiring Azure AD login.
+        /// Generated at tenant onboarding — shown once in admin portal.
+        /// Store hashed in DB, never in plain text.
+        /// </summary>
+        [MaxLength(200)]
+        public string ApiKeyHash { get; set; }
+
+        /// <summary>
+        /// Hint shown in admin portal so admin knows which key is active
+        /// without exposing the full key.
+        /// e.g. "doa_live_abc123..."  (first 16 chars only)
+        /// </summary>
+        [MaxLength(50)]
+        public string ApiKeyPrefix { get; set; }
+
         // Navigation
         public ICollection<TenantSubscription> Subscriptions { get; set; } = new List<TenantSubscription>();
         public ICollection<TenantConnection> Connections { get; set; } = new List<TenantConnection>();

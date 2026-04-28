@@ -8,4 +8,5 @@ public interface ITenantRepository
     Task<Tenant> GetByDomainAsync(string domain);
     Task UpdateSiteIdAsync(Guid tenantId, string siteId);
     Task SaveAsync();
+    Task<Tenant> GetByApiKeyAsync(string apiKeyHash);
 }

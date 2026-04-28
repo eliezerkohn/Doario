@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using Doario.Data.Models.Lookups;
+using Doario.Data.Models.SaaS;
 using Microsoft.EntityFrameworkCore;
 
 namespace Doario.Data.Seeding
@@ -21,6 +22,8 @@ namespace Doario.Data.Seeding
             SeedSourceTypes(modelBuilder);
             SeedSystemStatuses(modelBuilder);
             SeedMessageTypes(modelBuilder);
+            SeedSubscriptionPlans(modelBuilder);      // ← NEW
+            SeedSystemStatuses_PermanentFail(modelBuilder); // ← NEW
         }
 
         private static void SeedDocumentStatuses(ModelBuilder modelBuilder)
@@ -30,9 +33,10 @@ namespace Doario.Data.Seeding
                 new DocumentStatus { DocumentStatusId = 2, Name = "Assigned", SortOrder = 200, StartDate = Epoch, EndDate = Never },
                 new DocumentStatus { DocumentStatusId = 3, Name = "Read", SortOrder = 300, StartDate = Epoch, EndDate = Never },
                 new DocumentStatus { DocumentStatusId = 4, Name = "Actioned", SortOrder = 400, StartDate = Epoch, EndDate = Never },
-                // Day 9
                 new DocumentStatus { DocumentStatusId = 5, Name = "OcrFailed", SortOrder = 500, StartDate = Epoch, EndDate = Never },
-                new DocumentStatus { DocumentStatusId = 6, Name = "EmailReceived", SortOrder = 600, StartDate = Epoch, EndDate = Never }
+                new DocumentStatus { DocumentStatusId = 6, Name = "EmailReceived", SortOrder = 600, StartDate = Epoch, EndDate = Never },
+                new DocumentStatus { DocumentStatusId = 7, Name = "Spam", SortOrder = 700, StartDate = Epoch, EndDate = Never },
+                new DocumentStatus { DocumentStatusId = 8, Name = "Promotion", SortOrder = 800, StartDate = Epoch, EndDate = Never }
             );
         }
 
@@ -66,9 +70,9 @@ namespace Doario.Data.Seeding
                 new SourceType { SourceTypeId = 7, Name = "CustomDatabase", SortOrder = 700, StartDate = Epoch, EndDate = Never },
                 new SourceType { SourceTypeId = 8, Name = "CustomAPI", SortOrder = 800, StartDate = Epoch, EndDate = Never },
                 new SourceType { SourceTypeId = 9, Name = "VirtualMailroom", SortOrder = 900, StartDate = Epoch, EndDate = Never },
-                // Day 9
                 new SourceType { SourceTypeId = 10, Name = "Fax", SortOrder = 1000, StartDate = Epoch, EndDate = Never },
-                new SourceType { SourceTypeId = 11, Name = "Email", SortOrder = 1100, StartDate = Epoch, EndDate = Never }
+                new SourceType { SourceTypeId = 11, Name = "Email", SortOrder = 1100, StartDate = Epoch, EndDate = Never },
+                new SourceType { SourceTypeId = 12, Name = "Scanner", SortOrder = 1200, StartDate = Epoch, EndDate = Never }
             );
         }
 
@@ -86,6 +90,15 @@ namespace Doario.Data.Seeding
             );
         }
 
+        // Day 10 — PermanentFail added as separate method to avoid
+        // re-seeding the entire SystemStatuses block
+        private static void SeedSystemStatuses_PermanentFail(ModelBuilder modelBuilder)
+        {
+            modelBuilder.Entity<SystemStatus>().HasData(
+                new SystemStatus { SystemStatusId = 9, Name = "PermanentFail", SortOrder = 900, StartDate = Epoch, EndDate = Never }
+            );
+        }
+
         private static void SeedMessageTypes(ModelBuilder modelBuilder)
         {
             modelBuilder.Entity<MessageType>().HasData(
@@ -97,9 +110,60 @@ namespace Doario.Data.Seeding
                 new MessageType { MessageTypeId = 6, Name = "AdminReassignedViaOutlook", SortOrder = 600 },
                 new MessageType { MessageTypeId = 7, Name = "AdminMarkedUrgent", SortOrder = 700 },
                 new MessageType { MessageTypeId = 8, Name = "ViewedDocument", SortOrder = 800 },
-                // Day 9
                 new MessageType { MessageTypeId = 9, Name = "FaxReceived", SortOrder = 900 },
                 new MessageType { MessageTypeId = 10, Name = "EmailReceived", SortOrder = 1000 }
+            );
+        }
+
+        // ── NEW Day 12 ────────────────────────────────────────────────
+        private static void SeedSubscriptionPlans(ModelBuilder modelBuilder)
+        {
+            modelBuilder.Entity<SubscriptionPlan>().HasData(
+                new SubscriptionPlan
+                {
+                    SubscriptionPlanId = Guid.Parse("b1000000-0001-0001-0001-000000000001"),
+                    Name = "Starter",
+                    Description = "Perfect for small offices with low mail volume.",
+                    MonthlyPrice = 49.00m,
+                    IncludedDocuments = 50,
+                    ExtraDocumentPrice = 1.00m,
+                    StripePriceId = "",
+                    IsActive = true,
+                    IsPublic = true,
+                    SortOrder = 100,
+                    StartDate = Epoch,
+                    EndDate = Never,
+                },
+                new SubscriptionPlan
+                {
+                    SubscriptionPlanId = Guid.Parse("b1000000-0002-0002-0002-000000000002"),
+                    Name = "Growth",
+                    Description = "For growing teams handling moderate mail volume.",
+                    MonthlyPrice = 129.00m,
+                    IncludedDocuments = 300,
+                    ExtraDocumentPrice = 0.70m,
+                    StripePriceId = "",
+                    IsActive = true,
+                    IsPublic = true,
+                    SortOrder = 200,
+                    StartDate = Epoch,
+                    EndDate = Never,
+                },
+                new SubscriptionPlan
+                {
+                    SubscriptionPlanId = Guid.Parse("b1000000-0003-0003-0003-000000000003"),
+                    Name = "Business",
+                    Description = "For high-volume mail rooms processing hundreds of documents.",
+                    MonthlyPrice = 249.00m,
+                    IncludedDocuments = 600,
+                    ExtraDocumentPrice = 0.50m,
+                    StripePriceId = "",
+                    IsActive = true,
+                    IsPublic = true,
+                    SortOrder = 300,
+                    StartDate = Epoch,
+                    EndDate = Never,
+                }
             );
         }
     }

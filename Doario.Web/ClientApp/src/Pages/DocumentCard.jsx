@@ -1,40 +1,42 @@
 ﻿// DocumentCard.jsx — single document row in the mail room queue
-// Status label and colour come from the server (doc.statusName / doc.statusId).
-// No hardcoded status maps needed here.
 
 import React, { useState } from 'react';
 
-// Badge colour by statusId — purely visual, not business logic
 const badgeClass = (statusId) => ({
     1: 'bg-warning text-dark',
-    2: 'bg-info text-dark',
-    3: 'bg-success',
+    2: 'bg-success',
+    3: 'bg-info text-dark',
     4: 'bg-primary',
     5: 'bg-secondary',
     6: 'bg-danger',
 }[statusId] ?? 'bg-secondary');
 
-// Strip HTML and markdown for plain-text operations (truncation preview, search)
 const stripMarkup = (html) => {
     if (!html) return '';
-    return html
-        .replace(/<[^>]*>/g, ' ')
-        .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
-        .replace(/\*\*/g, '')
-        .replace(/\s+/g, ' ')
-        .trim();
+    return html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
 };
 
 const DocumentCard = ({ doc, onAssign, staffAvailable, isAssignedOverride }) => {
     const [expanded, setExpanded] = useState(false);
 
-    // Use local override for 15s after assigning so button doesn't flicker
-    const effectiveStatusId = isAssignedOverride ? 3 : doc.statusId;
+    const effectiveStatusId = isAssignedOverride ? 2 : doc.statusId;
     const effectiveStatusName = isAssignedOverride ? 'Assigned' : doc.statusName;
     const isAssigned = effectiveStatusId === 2;
 
     const summaryPlain = stripMarkup(doc.aiSummary);
     const summaryTruncated = summaryPlain.length > 120;
+
+    // Button is disabled if:
+    // 1. No staff loaded in the dropdown
+    // 2. AI summary not ready yet — staff should not receive an email with no summary
+    const assignDisabled = !staffAvailable || !doc.aiSummary;
+
+    // Tooltip explains why the button is disabled
+    const assignTitle = !doc.aiSummary
+        ? 'Waiting for AI summary before assigning'
+        : !staffAvailable
+            ? 'No staff loaded'
+            : '';
 
     return (
         <div className="card mb-3 shadow-sm">
@@ -43,13 +45,9 @@ const DocumentCard = ({ doc, onAssign, staffAvailable, isAssignedOverride }) => 
                 {/* Top row — status badges + filename */}
                 <div className="d-flex justify-content-between align-items-start gap-2 flex-wrap">
                     <div className="d-flex align-items-center gap-2 flex-wrap">
-
-                        {/* Status from DB */}
                         <span className={`badge ${badgeClass(effectiveStatusId)}`}>
                             {effectiveStatusName ?? 'Unknown'}
                         </span>
-
-                        {/* OCR / AI processing state */}
                         <span className={`badge ${doc.aiSummary ? 'bg-success' :
                                 doc.ocrText ? 'bg-info text-dark' :
                                     'bg-warning text-dark'}`}>
@@ -57,7 +55,6 @@ const DocumentCard = ({ doc, onAssign, staffAvailable, isAssignedOverride }) => 
                                 doc.ocrText ? 'Pending Summary' :
                                     'Pending OCR'}
                         </span>
-
                         <small className="text-muted">
                             {new Date(doc.uploadedAt + 'Z').toLocaleString()}
                         </small>
@@ -67,7 +64,7 @@ const DocumentCard = ({ doc, onAssign, staffAvailable, isAssignedOverride }) => 
                     </small>
                 </div>
 
-                {/* AI summary — rendered as HTML so <strong> and <br> display correctly */}
+                {/* Summary */}
                 {doc.aiSummary ? (
                     <div
                         className="mt-2 mb-0"
@@ -96,16 +93,22 @@ const DocumentCard = ({ doc, onAssign, staffAvailable, isAssignedOverride }) => 
                     <p className="mt-2 mb-0 text-muted fst-italic small">OCR not yet complete</p>
                 )}
 
-                {/* Assign / Reassign */}
+                {/* Assign / Reassign button */}
                 <div className="mt-3 d-flex gap-2 align-items-center">
                     <button
                         className={`btn btn-sm ${isAssigned ? 'btn-outline-warning' : 'btn-outline-dark'}`}
                         onClick={() => onAssign(doc)}
-                        disabled={!staffAvailable}
+                        disabled={assignDisabled}
+                        title={assignTitle}
                     >
                         {isAssigned ? 'Reassign' : 'Assign'}
                     </button>
-                    {!staffAvailable && <small className="text-muted">No staff loaded</small>}
+                    {!doc.aiSummary && (
+                        <small className="text-muted">Waiting for summary…</small>
+                    )}
+                    {doc.aiSummary && !staffAvailable && (
+                        <small className="text-muted">No staff loaded</small>
+                    )}
                 </div>
 
             </div>

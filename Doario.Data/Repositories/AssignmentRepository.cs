@@ -40,4 +40,14 @@ public class AssignmentRepository : IAssignmentRepository
 
     public async Task SaveAsync()
         => await _db.SaveChangesAsync();
+
+    public async Task<List<DocumentAssignment>> GetByEmailAsync(string email, Guid tenantId)
+        => await _db.DocumentAssignments
+            .Include(a => a.Document)
+                .ThenInclude(d => d.DocumentStatus)
+            .Include(a => a.AssignedToStaff)
+            .Where(a => a.TenantId == tenantId
+                     && a.AssignedToEmail.ToLower() == email.ToLower())
+            .OrderByDescending(a => a.AssignedAt)
+            .ToListAsync();
 }

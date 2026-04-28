@@ -11,6 +11,7 @@ public class EmailDeliveryService
     private readonly IDocumentRepository _documents;
     private readonly IAssignmentRepository _assignments;
     private readonly IDeliveryRepository _deliveries;
+    private readonly ITenantRepository _tenants;
     private readonly GraphServiceClient _graph;
     private readonly SharePointService _sharePoint;
     private readonly ILogger<EmailDeliveryService> _logger;
@@ -20,6 +21,7 @@ public class EmailDeliveryService
         IDocumentRepository documents,
         IAssignmentRepository assignments,
         IDeliveryRepository deliveries,
+        ITenantRepository tenants,
         GraphServiceClient graph,
         SharePointService sharePoint,
         ILogger<EmailDeliveryService> logger,
@@ -28,6 +30,7 @@ public class EmailDeliveryService
         _documents = documents;
         _assignments = assignments;
         _deliveries = deliveries;
+        _tenants = tenants;
         _graph = graph;
         _sharePoint = sharePoint;
         _logger = logger;
@@ -67,9 +70,7 @@ public class EmailDeliveryService
         try
         {
             var baseUrl = _config["Doario:BaseUrl"] ?? "https://doario.com";
-            var staffName = $"{assignment.AssignedToStaff.FirstName} {assignment.AssignedToStaff.LastName}".Trim();
 
-            // Download from SharePoint into memory — never written to disk
             List<Attachment> attachments = new();
             try
             {
@@ -85,40 +86,17 @@ public class EmailDeliveryService
             }
             catch (Exception attachEx)
             {
-                // Non-fatal — email sends without attachment, staff uses SharePoint link
                 _logger.LogWarning(attachEx,
                     "Could not attach file for Document {DocumentId}.", documentId);
             }
 
-            var message = new Message
-            {
-                Subject = BuildSubject(document),
-                Body = new ItemBody
-                {
-                    ContentType = BodyType.Html,
-                    Content = BuildDeliveryBody(document, assignment, baseUrl)
-                },
-                ToRecipients = new List<Recipient>
-                {
-                    new Recipient
-                    {
-                        EmailAddress = new EmailAddress
-                        {
-                            Address = assignment.AssignedToEmail,
-                            Name    = staffName
-                        }
-                    }
-                },
-                Attachments = attachments.Any() ? attachments : null
-            };
-
-            await _graph.Users[tenant.MailboxAddress]
-                .SendMail
-                .PostAsync(new Microsoft.Graph.Users.Item.SendMail.SendMailPostRequestBody
-                {
-                    Message = message,
-                    SaveToSentItems = false
-                });
+            await SendGraphEmailAsync(
+                tenant.MailboxAddress,
+                assignment.AssignedToEmail,
+                $"{assignment.AssignedToStaff.FirstName} {assignment.AssignedToStaff.LastName}".Trim(),
+                BuildSubject(document),
+                BuildDeliveryBody(document, assignment, baseUrl),
+                attachments);
 
             delivery.SystemStatusId = 8; // Sent
             delivery.SentAt = DateTime.UtcNow;
@@ -142,6 +120,66 @@ public class EmailDeliveryService
 
             return (false, ex.Message);
         }
+    }
+
+    // ── Retry delivery ────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Re-sends an existing DocumentDelivery that previously failed.
+    /// Called by EmailRetryService — throws on failure so retry logic can track count.
+    /// </summary>
+    public async Task RetryDeliveryAsync(DocumentDelivery delivery)
+    {
+        if (delivery.Document == null)
+            throw new InvalidOperationException(
+                $"Document not loaded on delivery {delivery.DocumentDeliveryId}");
+
+        var document = delivery.Document;
+
+        var tenant = await _tenants.GetByIdAsync(delivery.TenantId);
+        if (tenant == null)
+            throw new InvalidOperationException(
+                $"Tenant {delivery.TenantId} not found.");
+
+        if (string.IsNullOrEmpty(tenant.MailboxAddress))
+            throw new InvalidOperationException(
+                $"Tenant {delivery.TenantId} has no MailboxAddress.");
+
+        var baseUrl = _config["Doario:BaseUrl"] ?? "https://doario.com";
+
+        // Re-fetch assignment for token and note
+        var assignment = delivery.DocumentAssignment;
+
+        List<Attachment> attachments = new();
+        try
+        {
+            var (bytes, contentType) = await _sharePoint.DownloadFileAsync(
+                delivery.TenantId, document.SharePointUrl);
+
+            attachments.Add(new FileAttachment
+            {
+                Name = document.OriginalFileName,
+                ContentType = contentType,
+                ContentBytes = bytes
+            });
+        }
+        catch (Exception attachEx)
+        {
+            _logger.LogWarning(attachEx,
+                "Retry: could not attach file for Document {DocumentId}.", document.DocumentId);
+        }
+
+        await SendGraphEmailAsync(
+            tenant.MailboxAddress,
+            delivery.SentToEmail,
+            delivery.SentToEmail, // display name not critical on retry
+            BuildSubject(document),
+            BuildDeliveryBody(document, assignment, baseUrl),
+            attachments);
+
+        _logger.LogInformation(
+            "Retry succeeded: Document {DocumentId} -> {Email}",
+            document.DocumentId, delivery.SentToEmail);
     }
 
     // ── Reassign notification ─────────────────────────────────────────────────
@@ -193,6 +231,58 @@ public class EmailDeliveryService
 
             return (false, ex.Message);
         }
+    }
+
+    // ── Shared Graph send ─────────────────────────────────────────────────────
+
+    private async Task SendGraphEmailAsync(
+        string fromMailbox,
+        string toAddress,
+        string toDisplayName,
+        string subject,
+        string htmlBody,
+        List<Attachment> attachments)
+    {
+        var message = new Message
+        {
+            Subject = subject,
+            Body = new ItemBody
+            {
+                ContentType = BodyType.Html,
+                Content = htmlBody
+            },
+            ToRecipients = new List<Recipient>
+            {
+                new Recipient
+                {
+                    EmailAddress = new EmailAddress
+                    {
+                        Address = toAddress,
+                        Name = toDisplayName
+                    }
+                }
+            },
+            Attachments = attachments.Any() ? attachments : null,
+            ReplyTo = new List<Recipient>
+            {
+                new Recipient
+                {
+                    EmailAddress = new EmailAddress
+                    {
+                        Address = fromMailbox,
+                        Name = "Mail Room (Do Not Reply)"
+                    }
+                }
+            }
+        };
+
+        await _graph.Users[fromMailbox]
+            .SendMail
+            .PostAsync(new Microsoft.Graph.Users.Item.SendMail.SendMailPostRequestBody
+            {
+                Message = message,
+                SaveToSentItems = false
+            });
     }
 
     // ── Subject ───────────────────────────────────────────────────────────────
