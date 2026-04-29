@@ -91,6 +91,7 @@ public class Program
         builder.Services.AddScoped<ITenantWhitelistedSenderRepository, TenantWhitelistedSenderRepository>();
         builder.Services.AddScoped<IErrorLogRepository, ErrorLogRepository>();
         builder.Services.AddScoped<IDocumentViewedRepository, DocumentViewedRepository>();
+        builder.Services.AddScoped<ISenderRepository, SenderRepository>();
 
         // ── Services ──────────────────────────────────────────────────────────
         builder.Services.Configure<OcrOptions>(
@@ -108,6 +109,14 @@ public class Program
         builder.Services.AddScoped<StaffCsvService>();
 
         builder.Services.AddScoped<ApiKeyService>();
+
+        builder.Services.AddScoped<PdfService>();
+        builder.Services.AddScoped<AiBatchSplitService>();
+
+        builder.Services.AddScoped<SenderResolutionService>();
+
+        builder.Services.AddScoped<IExtractionFieldRepository, ExtractionFieldRepository>();
+        builder.Services.AddScoped<IDocumentCheckRepository, DocumentCheckRepository>();
 
         var app = builder.Build();
 

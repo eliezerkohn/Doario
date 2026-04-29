@@ -12,6 +12,17 @@ public class ScannerService
 {
     private readonly SettingsService _settingsService;
 
+    // A page is blank if this fraction of sampled pixels are "light"
+    // 0.98 = 98% of sampled pixels must be near-white
+    private const double BlankThreshold = 0.98;
+
+    // Pixel brightness threshold — 0-255, anything above this is "white"
+    // 240 catches off-white scanner backgrounds
+    private const int WhiteLevel = 240;
+
+    // Sample every Nth pixel for performance — no need to check every pixel
+    private const int SampleStep = 10;
+
     public ScannerService(SettingsService settingsService)
     {
         _settingsService = settingsService;
@@ -118,6 +129,16 @@ public class ScannerService
                                 bmp.Palette = palette;
                             }
 
+                            // ── Blank page detection ──────────────────────────
+                            // Sample pixels — if nearly all are near-white, treat
+                            // this page as a blank separator and add empty string.
+                            // Empty string = blank page signal to the backend splitter.
+                            if (IsBlankPage(bmp))
+                            {
+                                lock (pages) { pages.Add(string.Empty); }
+                                return;
+                            }
+
                             using var ms = new MemoryStream();
                             bmp.Save(ms, ImageFormat.Png);
                             var base64 = Convert.ToBase64String(ms.ToArray());
@@ -204,7 +225,42 @@ public class ScannerService
         return response;
     }
 
-    // ── Private helpers ───────────────────────────────────────────
+    // ── Blank page detection ──────────────────────────────────────────────────
+    // Samples every SampleStep-th pixel. Converts to grayscale brightness.
+    // If >= BlankThreshold of sampled pixels are above WhiteLevel, it's blank.
+
+    private static bool IsBlankPage(Bitmap bmp)
+    {
+        try
+        {
+            int total = 0;
+            int light = 0;
+
+            for (int y = 0; y < bmp.Height; y += SampleStep)
+            {
+                for (int x = 0; x < bmp.Width; x += SampleStep)
+                {
+                    var pixel = bmp.GetPixel(x, y);
+                    // Perceived brightness (standard luminance weights)
+                    var brightness = (int)(pixel.R * 0.299 + pixel.G * 0.587 + pixel.B * 0.114);
+                    total++;
+                    if (brightness >= WhiteLevel)
+                        light++;
+                }
+            }
+
+            if (total == 0) return true;
+
+            return (double)light / total >= BlankThreshold;
+        }
+        catch
+        {
+            // If pixel analysis fails for any reason, don't treat it as blank
+            return false;
+        }
+    }
+
+    // ── Private helpers ───────────────────────────────────────────────────────
 
     private TwainSession CreateSession()
     {
@@ -234,7 +290,7 @@ public class ScannerService
         catch { }
     }
 
-    // ── P/Invoke ──────────────────────────────────────────────────
+    // ── P/Invoke ──────────────────────────────────────────────────────────────
 
     [DllImport("kernel32.dll")]
     private static extern IntPtr GlobalLock(IntPtr hMem);
@@ -246,7 +302,7 @@ public class ScannerService
     private static extern void RtlMoveMemory(IntPtr dest, IntPtr src, uint len);
 }
 
-// ── Native structs ────────────────────────────────────────────────
+// ── Native structs ────────────────────────────────────────────────────────────
 
 [StructLayout(LayoutKind.Sequential)]
 public struct BITMAPINFOHEADER

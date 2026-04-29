@@ -4,6 +4,7 @@ using Doario.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Doario.Data.Migrations
 {
     [DbContext(typeof(DoarioDataContext))]
-    partial class DoarioDataContextModelSnapshot : ModelSnapshot
+    [Migration("20260428213258_BackfillSendersFromDocuments")]
+    partial class BackfillSendersFromDocuments
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -640,6 +643,15 @@ namespace Doario.Data.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("nvarchar(500)");
 
+                    b.Property<string>("SenderDisplayName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("SenderEmail")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
                     b.Property<Guid>("SenderId")
                         .HasColumnType("uniqueidentifier");
 
@@ -751,39 +763,6 @@ namespace Doario.Data.Migrations
                     b.HasIndex("TenantId");
 
                     b.ToTable("DocumentAssignments");
-                });
-
-            modelBuilder.Entity("Doario.Data.Models.Mail.DocumentCheck", b =>
-                {
-                    b.Property<Guid>("DocumentCheckId")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<decimal>("CheckAmount")
-                        .HasColumnType("decimal(18,2)");
-
-                    b.Property<string>("CheckNumber")
-                        .IsRequired()
-                        .HasMaxLength(50)
-                        .HasColumnType("nvarchar(50)");
-
-                    b.Property<string>("CheckPayerName")
-                        .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("nvarchar(200)");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<Guid>("DocumentId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.HasKey("DocumentCheckId");
-
-                    b.HasIndex("DocumentId")
-                        .IsUnique();
-
-                    b.ToTable("DocumentChecks");
                 });
 
             modelBuilder.Entity("Doario.Data.Models.Mail.DocumentDelivery", b =>
@@ -1082,45 +1061,6 @@ namespace Doario.Data.Migrations
                     b.HasIndex("TenantId");
 
                     b.ToTable("ImportedStaff", (string)null);
-                });
-
-            modelBuilder.Entity("Doario.Data.Models.Mail.TenantExtractionField", b =>
-                {
-                    b.Property<Guid>("TenantExtractionFieldId")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<DateTime>("EndDate")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("datetime2")
-                        .HasDefaultValue(new DateTime(9999, 12, 31, 23, 59, 59, 999, DateTimeKind.Unspecified).AddTicks(9999));
-
-                    b.Property<string>("FieldDescription")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasMaxLength(500)
-                        .HasColumnType("nvarchar(500)")
-                        .HasDefaultValue("");
-
-                    b.Property<string>("FieldName")
-                        .IsRequired()
-                        .HasMaxLength(100)
-                        .HasColumnType("nvarchar(100)");
-
-                    b.Property<int>("SortOrder")
-                        .HasColumnType("int");
-
-                    b.Property<DateTime>("StartDate")
-                        .HasColumnType("datetime2");
-
-                    b.Property<Guid>("TenantId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.HasKey("TenantExtractionFieldId");
-
-                    b.HasIndex("TenantId");
-
-                    b.ToTable("TenantExtractionFields");
                 });
 
             modelBuilder.Entity("Doario.Data.Models.Mail.TenantWhitelistedSender", b =>
@@ -1742,17 +1682,6 @@ namespace Doario.Data.Migrations
                     b.Navigation("Tenant");
                 });
 
-            modelBuilder.Entity("Doario.Data.Models.Mail.DocumentCheck", b =>
-                {
-                    b.HasOne("Doario.Data.Models.Mail.Document", "Document")
-                        .WithOne()
-                        .HasForeignKey("Doario.Data.Models.Mail.DocumentCheck", "DocumentId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.Navigation("Document");
-                });
-
             modelBuilder.Entity("Doario.Data.Models.Mail.DocumentDelivery", b =>
                 {
                     b.HasOne("Doario.Data.Models.Mail.DocumentAssignment", "DocumentAssignment")
@@ -1897,17 +1826,6 @@ namespace Doario.Data.Migrations
                 });
 
             modelBuilder.Entity("Doario.Data.Models.Mail.ImportedStaff", b =>
-                {
-                    b.HasOne("Doario.Data.Models.SaaS.Tenant", "Tenant")
-                        .WithMany()
-                        .HasForeignKey("TenantId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.Navigation("Tenant");
-                });
-
-            modelBuilder.Entity("Doario.Data.Models.Mail.TenantExtractionField", b =>
                 {
                     b.HasOne("Doario.Data.Models.SaaS.Tenant", "Tenant")
                         .WithMany()

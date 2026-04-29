@@ -299,7 +299,7 @@ public class EmailDeliveryService
                         : plain;
             return $"New Mail: {snippet}";
         }
-        return $"New Mail: {document.SenderDisplayName} — {document.OriginalFileName}";
+        return $"New Mail: {document.Sender?.DisplayName ?? document.OriginalFileName} — {document.OriginalFileName}";
     }
 
     // ── Delivery email body ───────────────────────────────────────────────────
@@ -316,14 +316,16 @@ public class EmailDeliveryService
         var noteUrl = $"{baseUrl}/note/{docId}/{token}";
         var viewUrl = document.SharePointUrl;
 
-        var senderName = !string.IsNullOrWhiteSpace(document.SenderDisplayName)
-            ? document.SenderDisplayName
+        var senderName = !string.IsNullOrWhiteSpace(document.Sender?.DisplayName)
+            ? document.Sender.DisplayName
             : "Unknown Sender";
 
-        var senderLine = string.IsNullOrWhiteSpace(document.SenderEmail)
+        var senderEmail = document.Sender?.Email ?? string.Empty;
+
+        var senderLine = string.IsNullOrWhiteSpace(senderEmail)
             ? Enc(senderName)
-            : $"{Enc(senderName)} &lt;<a href=\"mailto:{Enc(document.SenderEmail)}\">" +
-              $"{Enc(document.SenderEmail)}</a>&gt;";
+            : $"{Enc(senderName)} &lt;<a href=\"mailto:{Enc(senderEmail)}\">" +
+              $"{Enc(senderEmail)}</a>&gt;";
 
         var summaryHtml = string.IsNullOrWhiteSpace(document.AiSummary)
             ? "<em style=\"color:#6b7280;\">AI summary not yet available.</em>"
@@ -411,7 +413,7 @@ public class EmailDeliveryService
       </tr>
       <tr>
         <td style=""color:#6b7280;font-size:13px;padding:4px 12px 4px 0;white-space:nowrap;vertical-align:top;"">From</td>
-        <td style=""font-size:14px;padding:4px 0;"">{Enc(document.SenderDisplayName)}</td>
+        <td style=""font-size:14px;padding:4px 0;"">{Enc(document.Sender?.DisplayName ?? string.Empty)}</td>
       </tr>
       <tr>
         <td style=""color:#6b7280;font-size:13px;padding:4px 12px 4px 0;white-space:nowrap;vertical-align:top;"">Received</td>

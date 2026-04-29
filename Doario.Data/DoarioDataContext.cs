@@ -54,6 +54,8 @@ public class DoarioDataContext : DbContext
     public DbSet<TenantWhitelistedSender> TenantWhitelistedSenders { get; set; }
     public DbSet<ErrorLog> ErrorLogs { get; set; }
     public DbSet<DocumentViewed> DocumentVieweds { get; set; }
+    public DbSet<TenantExtractionField> TenantExtractionFields { get; set; }
+    public DbSet<DocumentCheck> DocumentChecks { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -104,6 +106,51 @@ public class DoarioDataContext : DbContext
             .Property(d => d.MonthlyPrice).HasPrecision(18, 2);
         modelBuilder.Entity<DocumentUsage>()
             .Property(d => d.TotalCharged).HasPrecision(18, 2);
+
+        // ── TenantExtractionField ─────────────────────────────────────
+        modelBuilder.Entity<TenantExtractionField>(e =>
+        {
+            e.HasKey(x => x.TenantExtractionFieldId);
+
+            e.Property(x => x.FieldName)
+                .IsRequired()
+                .HasMaxLength(100);
+
+            e.Property(x => x.FieldDescription)
+                .IsRequired()
+                .HasMaxLength(500)
+                .HasDefaultValue("");
+
+            e.Property(x => x.EndDate)
+                .HasDefaultValue(DateTime.MaxValue);
+
+            e.HasOne(x => x.Tenant)
+                .WithMany()
+                .HasForeignKey(x => x.TenantId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // ── DocumentCheck ─────────────────────────────────────────────
+        modelBuilder.Entity<DocumentCheck>(e =>
+        {
+            e.HasKey(x => x.DocumentCheckId);
+
+            e.Property(x => x.CheckAmount)
+                .HasColumnType("decimal(18,2)");
+
+            e.Property(x => x.CheckPayerName)
+                .IsRequired()
+                .HasMaxLength(200);
+
+            e.Property(x => x.CheckNumber)
+                .IsRequired()
+                .HasMaxLength(50);
+
+            e.HasOne(x => x.Document)
+                .WithOne()
+                .HasForeignKey<DocumentCheck>(x => x.DocumentId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
 
         DoarioDataSeeder.Seed(modelBuilder);
     }

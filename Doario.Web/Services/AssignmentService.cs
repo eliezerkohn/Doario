@@ -1,5 +1,7 @@
 ﻿using Doario.Data.Models.Mail;
 using Doario.Data.Repositories;
+using Microsoft.Graph;
+using Microsoft.Graph.Models.ODataErrors;
 
 namespace Doario.Web.Services;
 
@@ -10,6 +12,7 @@ public class AssignmentService
     private readonly IDeliveryRepository _deliveries;
     private readonly IStaffRepository _staff;
     private readonly EmailDeliveryService _emailDelivery;
+    private readonly GraphServiceClient _graph;
     private readonly ILogger<AssignmentService> _logger;
 
     public AssignmentService(
@@ -18,6 +21,7 @@ public class AssignmentService
         IDeliveryRepository deliveries,
         IStaffRepository staff,
         EmailDeliveryService emailDelivery,
+        GraphServiceClient graph,
         ILogger<AssignmentService> logger)
     {
         _documents = documents;
@@ -25,6 +29,7 @@ public class AssignmentService
         _deliveries = deliveries;
         _staff = staff;
         _emailDelivery = emailDelivery;
+        _graph = graph;
         _logger = logger;
     }
 
@@ -42,6 +47,43 @@ public class AssignmentService
         var staff = await _staff.GetByIdAsync(assignedToStaffId, tenantId);
         if (staff is null)
             return (false, "Staff member not found.");
+
+        // ── Validate email exists in M365 before doing anything ───────────────
+        // Catches typos and deleted accounts before the assignment is written.
+        // Only validates addresses within the same M365 tenant — external addresses
+        // (e.g. Gmail staff) will get a warning logged but are still allowed through.
+
+        try
+        {
+            var m365User = await _graph.Users[staff.Email].GetAsync();
+            if (m365User is null)
+            {
+                _logger.LogWarning(
+                    "AssignmentService: staff email {Email} returned null from M365.",
+                    staff.Email);
+                return (false, $"The email address {staff.Email} could not be verified in Microsoft 365. Please check the address and try again.");
+            }
+        }
+        catch (ODataError odataEx) when (odataEx.ResponseStatusCode == 404)
+        {
+            // Address not found in this M365 tenant — hard stop
+            return (false, $"The email address {staff.Email} does not exist in your Microsoft 365 directory. Please update the staff record and try again.");
+        }
+        catch (ODataError odataEx)
+        {
+            // Graph returned another error (permissions, throttle, etc.) — log and allow through
+            // so a Graph hiccup doesn't block every assignment
+            _logger.LogWarning(
+                "AssignmentService: M365 validation returned {Status} for {Email}: {Msg}",
+                odataEx.ResponseStatusCode, staff.Email, odataEx.Message);
+        }
+        catch (Exception ex)
+        {
+            // Network / config issue — log and allow through
+            _logger.LogWarning(
+                "AssignmentService: M365 validation failed for {Email}: {Msg}",
+                staff.Email, ex.Message);
+        }
 
         // ── Remove existing assignment if this is a reassign ──────────────────
 

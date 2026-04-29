@@ -1,6 +1,4 @@
 ﻿// AdminQueue.jsx — mail room queue page
-// Status labels come from server (doc.statusName) — no hardcoded maps.
-// Polls every 5 seconds to update OCR/AI progress without hard refresh.
 
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import axios from 'axios';
@@ -50,19 +48,14 @@ const AdminQueue = () => {
     const [hasMore, setHasMore] = useState(true);
     const [assigningDoc, setAssigningDoc] = useState(null);
 
-    // Tracks locally-assigned docs with timestamp.
-    // Poll keeps statusId=2 for 15s to prevent flicker.
     const localAssigned = useRef({});
     const pollRef = useRef(null);
 
     const loadDocs = async (pageNum, append = false) => {
         try {
             const r = await axios.get(`/api/admin/queue?page=${pageNum}`);
-            if (append) {
-                setDocs(prev => [...prev, ...r.data]);
-            } else {
-                setDocs(r.data);
-            }
+            if (append) setDocs(prev => [...prev, ...r.data]);
+            else setDocs(r.data);
             setHasMore(r.data.length === 50);
         } catch (e) {
             setError(e.response?.status === 403
@@ -80,30 +73,22 @@ const AdminQueue = () => {
             setDocs(prev => prev.map(d => {
                 const server = map.get(d.documentId);
                 if (!server) return d;
-
                 const assignedAt = localAssigned.current[d.documentId];
                 const recentlyAssigned = assignedAt && (now - assignedAt < 15000);
-
-                // Server hasn't caught up — keep optimistic statusId=2
-                if (recentlyAssigned && server.statusId !== 2) {
+                if (recentlyAssigned && server.statusId !== 2)
                     return { ...server, statusId: 2, statusName: 'Assigned' };
-                }
-
-                // Server confirmed — clear local override
-                if (server.statusId === 2) {
+                if (server.statusId === 2)
                     delete localAssigned.current[d.documentId];
-                }
-
                 return server;
             }));
-        } catch { /* never surface background poll errors */ }
+        } catch { }
     }, []);
 
     const loadStaff = async () => {
         try {
             const r = await axios.get('/api/assignment/staff');
             setStaff(r.data);
-        } catch { /* silent */ }
+        } catch { }
     };
 
     useEffect(() => {
@@ -120,23 +105,19 @@ const AdminQueue = () => {
         setLoadingMore(false);
     };
 
-    // Called BEFORE API call — sets guard immediately so poll can't flicker
     const handleAssigned = (documentId) => {
         localAssigned.current[documentId] = Date.now();
         setDocs(prev => prev.map(d =>
             d.documentId === documentId
-                ? { ...d, statusId: 2, statusName: 'Assigned' }
-                : d
+                ? { ...d, statusId: 2, statusName: 'Assigned' } : d
         ));
     };
 
-    // Called if API call fails — reverts optimistic update
     const handleReverted = (documentId, originalStatusId) => {
         delete localAssigned.current[documentId];
         setDocs(prev => prev.map(d =>
             d.documentId === documentId
-                ? { ...d, statusId: originalStatusId }
-                : d
+                ? { ...d, statusId: originalStatusId } : d
         ));
     };
 
@@ -159,12 +140,37 @@ const AdminQueue = () => {
 
             {!loading && docs.length > 0 && <StatusPills docs={docs} />}
 
-            <input
-                className="form-control mb-3"
-                placeholder="Search file name, summary or OCR text…"
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-            />
+            {/* Search with clear button */}
+            <div style={{ position: 'relative', marginBottom: 16 }}>
+                <input
+                    className="form-control"
+                    placeholder="Search file name, summary or OCR text…"
+                    value={search}
+                    onChange={e => setSearch(e.target.value)}
+                    style={{ paddingRight: search ? 36 : 12 }}
+                />
+                {search && (
+                    <button
+                        onClick={() => setSearch('')}
+                        title="Clear search"
+                        style={{
+                            position: 'absolute',
+                            right: 10,
+                            top: '50%',
+                            transform: 'translateY(-50%)',
+                            background: 'transparent',
+                            border: 'none',
+                            cursor: 'pointer',
+                            fontSize: 12,
+                            color: '#6b7280',
+                            padding: '2px 4px',
+                            lineHeight: 1,
+                        }}
+                    >
+                        ✕
+                    </button>
+                )}
+            </div>
 
             {loading && <p>Loading…</p>}
             {error && <div className="alert alert-danger">{error}</div>}

@@ -62,8 +62,6 @@ public class UploadController : ControllerBase
             UploadedByStaffId = tenant.SystemStaffId,
             SharePointUrl = sharePointUrl,
             OcrText = null,
-            SenderDisplayName = string.Empty,
-            SenderEmail = string.Empty,
             SenderMatchConfidence = 0,
             UploadedAt = DateTime.UtcNow,
             OriginalFileName = file.FileName
@@ -75,7 +73,6 @@ public class UploadController : ControllerBase
             "Document {DocumentId} created for tenant {TenantId}.",
             document.DocumentId, _tenantContext.TenantId);
 
-        // Fire OCR in background
         _ocrService.RunInBackground(document.DocumentId);
 
         return Ok(new

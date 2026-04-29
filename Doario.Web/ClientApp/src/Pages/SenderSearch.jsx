@@ -1,6 +1,6 @@
-﻿// MailSearch.jsx — staff email search panel
+﻿// SenderSearch.jsx — search documents by sender, with dropdown of all known senders
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 
 const formatDate = (dateStr) => {
@@ -21,32 +21,42 @@ const stripMarkup = (html) => {
     return html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
 };
 
-const TABS = ['All', 'Active', 'Completed'];
+const TABS = ['All', 'Unassigned', 'Assigned', 'Actioned'];
 
-const MailSearch = ({ staff, selected, onSelect }) => {
-    const [email, setEmail] = useState('');
+const SenderSearch = ({ selected, onSelect }) => {
+    const [input, setInput] = useState('');
     const [query, setQuery] = useState('');
     const [results, setResults] = useState([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
     const [tab, setTab] = useState('All');
     const [showDrop, setShowDrop] = useState(false);
+    const [senders, setSenders] = useState([]);
 
-    const filteredStaff = staff.filter(s =>
-        !email ||
-        s.email.toLowerCase().includes(email.toLowerCase()) ||
-        `${s.firstName} ${s.lastName}`.toLowerCase().includes(email.toLowerCase())
+    // Load all known senders on mount — same pattern as staff list in MailSearch
+    useEffect(() => {
+        axios.get('/api/admin/senders')
+            .then(r => setSenders(r.data))
+            .catch(() => setSenders([]));
+    }, []);
+
+    const filteredSenders = senders.filter(s =>
+        !input ||
+        s.displayName?.toLowerCase().includes(input.toLowerCase()) ||
+        s.email?.toLowerCase().includes(input.toLowerCase())
     );
 
-    const doSearch = async (emailToSearch) => {
-        if (!emailToSearch) return;
+    const doSearch = async (term) => {
+        const trimmed = term.trim();
+        if (!trimmed) return;
         setLoading(true);
         setError(null);
         setResults([]);
+        setShowDrop(false);
         try {
-            const r = await axios.get(`/api/assignment/by-email?email=${encodeURIComponent(emailToSearch)}`);
+            const r = await axios.get(`/api/admin/by-sender?q=${encodeURIComponent(trimmed)}`);
             setResults(r.data);
-            setQuery(emailToSearch);
+            setQuery(trimmed);
         } catch {
             setError('Search failed. Please try again.');
         } finally {
@@ -55,37 +65,41 @@ const MailSearch = ({ staff, selected, onSelect }) => {
     };
 
     const handleSelect = (s) => {
-        setEmail(s.email);
+        const term = s.displayName || s.email;
+        setInput(term);
         setShowDrop(false);
-        doSearch(s.email);
+        doSearch(term);
     };
 
     const handleKeyDown = (e) => {
-        if (e.key === 'Enter') {
-            setShowDrop(false);
-            doSearch(email);
-        }
+        if (e.key === 'Enter') doSearch(input);
+        if (e.key === 'Escape') setShowDrop(false);
     };
 
     const handleClear = () => {
-        setEmail('');
+        setInput('');
         setQuery('');
         setResults([]);
         setError(null);
+        setTab('All');
         setShowDrop(false);
     };
 
-    const filtered = results.filter(d => {
-        if (tab === 'Active') return d.statusId === 2;
-        if (tab === 'Completed') return d.statusId === 4;
-        return true;
-    });
+    const tabStatusMap = {
+        'Unassigned': [1],
+        'Assigned': [2],
+        'Actioned': [4],
+    };
+
+    const filtered = tab === 'All'
+        ? results
+        : results.filter(d => (tabStatusMap[tab] ?? []).includes(d.statusId));
 
     return (
         <div style={styles.panel}>
 
             <div style={styles.header}>
-                <h2 style={styles.title}>Search by Staff</h2>
+                <h2 style={styles.title}>Search by Sender</h2>
             </div>
 
             <div style={styles.searchSection}>
@@ -93,42 +107,42 @@ const MailSearch = ({ staff, selected, onSelect }) => {
                     <div style={styles.inputRow}>
                         <input
                             style={styles.input}
-                            placeholder="Type name or email…"
-                            value={email}
-                            onChange={e => { setEmail(e.target.value); setShowDrop(true); }}
+                            placeholder="Sender name or email…"
+                            value={input}
+                            onChange={e => { setInput(e.target.value); setShowDrop(true); }}
                             onFocus={() => setShowDrop(true)}
                             onKeyDown={handleKeyDown}
                         />
-                        {email && (
-                            <button
-                                style={styles.clearBtn}
-                                onClick={handleClear}
-                                title="Clear search"
-                            >
+                        {input && (
+                            <button style={styles.clearBtn} onClick={handleClear} title="Clear">
                                 ✕
                             </button>
                         )}
                     </div>
-                    <button
-                        style={styles.searchBtn}
-                        onClick={() => { setShowDrop(false); doSearch(email); }}
-                    >
+                    <button style={styles.searchBtn} onClick={() => doSearch(input)}>
                         Search
                     </button>
                 </div>
 
-                {showDrop && filteredStaff.length > 0 && (
+                {showDrop && filteredSenders.length > 0 && (
                     <div style={styles.dropdown}>
-                        {filteredStaff.map(s => (
-                            <div
-                                key={s.importedStaffId}
-                                style={styles.dropItem}
-                                onMouseDown={() => handleSelect(s)}
-                            >
-                                <div style={styles.dropName}>{s.firstName} {s.lastName}</div>
-                                <div style={styles.dropEmail}>{s.email}</div>
-                            </div>
-                        ))}
+                        {filteredSenders.map((s, i) => {
+                            const label = s.displayName || s.email;
+                            const sub = s.displayName ? s.email : null;
+                            return (
+                                <div
+                                    key={i}
+                                    style={styles.dropItem}
+                                    onMouseDown={() => handleSelect(s)}
+                                >
+                                    <div style={styles.dropName}>{label}</div>
+                                    {sub && <div style={styles.dropEmail}>{sub}</div>}
+                                    <div style={styles.dropCount}>
+                                        {s.documentCount} doc{s.documentCount !== 1 ? 's' : ''}
+                                    </div>
+                                </div>
+                            );
+                        })}
                     </div>
                 )}
             </div>
@@ -155,7 +169,7 @@ const MailSearch = ({ staff, selected, onSelect }) => {
                         {error && <div style={styles.empty}>{error}</div>}
                         {!loading && !error && filtered.length === 0 && (
                             <div style={styles.empty}>
-                                No {tab !== 'All' ? tab.toLowerCase() + ' ' : ''}documents found for {query}
+                                No {tab !== 'All' ? tab.toLowerCase() + ' ' : ''}documents found for "{query}"
                             </div>
                         )}
                         {filtered.map(doc => {
@@ -175,6 +189,9 @@ const MailSearch = ({ staff, selected, onSelect }) => {
                                             </span>
                                             <span style={styles.date}>{formatDate(doc.uploadedAt)}</span>
                                         </div>
+                                        {doc.senderEmail && (
+                                            <div style={styles.senderEmail}>{doc.senderEmail}</div>
+                                        )}
                                         <div style={styles.filename}>{doc.originalFileName}</div>
                                         <div style={styles.preview}>
                                             {plain ? plain.substring(0, 80) + (plain.length > 80 ? '…' : '') : 'Processing…'}
@@ -183,8 +200,8 @@ const MailSearch = ({ staff, selected, onSelect }) => {
                                             <span style={{ ...styles.statusPill, color: statusColor(doc.statusId) }}>
                                                 {doc.statusName}
                                             </span>
-                                            <span style={styles.assignedDate}>
-                                                Assigned {formatDate(doc.assignedAt)}
+                                            <span style={styles.receivedDate}>
+                                                Received {formatDate(doc.uploadedAt)}
                                             </span>
                                         </div>
                                     </div>
@@ -197,10 +214,10 @@ const MailSearch = ({ staff, selected, onSelect }) => {
 
             {!query && !loading && (
                 <div style={styles.emptyState}>
-                    <div style={styles.emptyIcon}>🔍</div>
-                    <div style={styles.emptyTitle}>Search by staff email</div>
+                    <div style={styles.emptyIcon}>✉️</div>
+                    <div style={styles.emptyTitle}>Search by sender</div>
                     <div style={styles.emptySub}>
-                        Select a staff member to see all documents assigned to them
+                        Select a sender from the dropdown or type a name to find all documents from them
                     </div>
                 </div>
             )}
@@ -240,7 +257,7 @@ const styles = {
         position: 'absolute', left: 12, right: 12, top: '100%',
         background: '#fff', border: '1px solid #edebe9',
         borderRadius: 4, boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-        zIndex: 100, maxHeight: 220, overflowY: 'auto',
+        zIndex: 100, maxHeight: 260, overflowY: 'auto',
     },
     dropItem: {
         padding: '8px 12px', cursor: 'pointer',
@@ -248,6 +265,7 @@ const styles = {
     },
     dropName: { fontSize: 12, fontWeight: 600, color: '#323130' },
     dropEmail: { fontSize: 11, color: '#a19f9d', marginTop: 1 },
+    dropCount: { fontSize: 10, color: '#0f6cbd', marginTop: 2 },
     tabs: {
         display: 'flex', alignItems: 'center', gap: 4,
         padding: '8px 12px', borderBottom: '1px solid #edebe9',
@@ -272,11 +290,12 @@ const styles = {
     itemTop: { display: 'flex', justifyContent: 'space-between', marginBottom: 2 },
     sender: { fontSize: 12, fontWeight: 600, color: '#323130', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 160 },
     date: { fontSize: 11, color: '#a19f9d', flexShrink: 0 },
+    senderEmail: { fontSize: 11, color: '#0f6cbd', marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
     filename: { fontSize: 11, color: '#605e5c', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: 2 },
     preview: { fontSize: 11, color: '#a19f9d', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: 4 },
     statusRow: { display: 'flex', alignItems: 'center', gap: 8 },
     statusPill: { fontSize: 10, fontWeight: 700 },
-    assignedDate: { fontSize: 10, color: '#a19f9d' },
+    receivedDate: { fontSize: 10, color: '#a19f9d' },
     emptyState: {
         flex: 1, display: 'flex', flexDirection: 'column',
         alignItems: 'center', justifyContent: 'center',
@@ -287,4 +306,4 @@ const styles = {
     emptySub: { fontSize: 12, color: '#a19f9d', textAlign: 'center' },
 };
 
-export default MailSearch;
+export default SenderSearch;

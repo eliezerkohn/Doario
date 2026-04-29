@@ -67,9 +67,58 @@ public class SharePointService
     }
 
     // -------------------------------------------------------------------------
+    // Delete — called when operator rescans or deletes a document before confirm
+    // -------------------------------------------------------------------------
+
+    public async Task DeleteFileAsync(
+        Guid tenantId,
+        string sharePointUrl,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var tenant = await _db.Tenants
+                .FirstOrDefaultAsync(t => t.TenantId == tenantId, cancellationToken);
+
+            if (tenant is null)
+            {
+                _logger.LogWarning("DeleteFileAsync: Tenant {TenantId} not found.", tenantId);
+                return;
+            }
+
+            var siteId = await ResolveSiteIdAsync(tenant, cancellationToken);
+            var driveId = await GetOrCreateDriveAsync(siteId, cancellationToken);
+
+            var item = await _graph.Drives[driveId]
+                .Root
+                .ItemWithPath(ExtractPathFromUrl(sharePointUrl))
+                .GetAsync(cancellationToken: cancellationToken);
+
+            if (item?.Id is null)
+            {
+                _logger.LogWarning(
+                    "DeleteFileAsync: item not found for URL {Url} — skipping.", sharePointUrl);
+                return;
+            }
+
+            await _graph.Drives[driveId]
+                .Items[item.Id]
+                .DeleteAsync(cancellationToken: cancellationToken);
+
+            _logger.LogInformation(
+                "Tenant {TenantId} — deleted SharePoint file: {Url}", tenantId, sharePointUrl);
+        }
+        catch (Exception ex)
+        {
+            // Log but don't throw — a failed delete should never block the user
+            _logger.LogWarning(ex,
+                "DeleteFileAsync: failed to delete {Url} for tenant {TenantId}.",
+                sharePointUrl, tenantId);
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // Download — called by EmailDeliveryService to attach file to email
-    // Downloads into memory only — never written to disk
-    // Returns (bytes, contentType) or throws on failure
     // -------------------------------------------------------------------------
 
     public async Task<(byte[] Bytes, string ContentType)> DownloadFileAsync(
@@ -86,9 +135,6 @@ public class SharePointService
         var siteId = await ResolveSiteIdAsync(tenant, cancellationToken);
         var driveId = await GetOrCreateDriveAsync(siteId, cancellationToken);
 
-        // Resolve the DriveItem ID from the WebUrl
-        // Graph v5: search by webUrl filter to get item ID
-        var encodedUrl = Uri.EscapeDataString(sharePointUrl);
         var itemRequest = await _graph.Drives[driveId]
             .Root
             .ItemWithPath(ExtractPathFromUrl(sharePointUrl))
@@ -98,7 +144,6 @@ public class SharePointService
             throw new InvalidOperationException(
                 $"Could not resolve SharePoint item for URL: {sharePointUrl}");
 
-        // Download content stream into memory
         var stream = await _graph.Drives[driveId]
             .Items[itemRequest.Id]
             .Content
@@ -112,7 +157,6 @@ public class SharePointService
         await stream.CopyToAsync(ms, cancellationToken);
         var bytes = ms.ToArray();
 
-        // Determine content type from file extension
         var ext = Path.GetExtension(sharePointUrl).ToLowerInvariant();
         var contentType = ext switch
         {
@@ -126,28 +170,24 @@ public class SharePointService
         };
 
         _logger.LogInformation(
-            "Tenant {TenantId} — downloaded {Bytes} bytes from SharePoint for email attachment.",
+            "Tenant {TenantId} — downloaded {Bytes} bytes from SharePoint.",
             tenantId, bytes.Length);
 
         return (bytes, contentType);
     }
 
     // -------------------------------------------------------------------------
-    // Extracts the relative file path from a SharePoint WebUrl
-    // e.g. https://tenant.sharepoint.com/sites/X/Shared%20Documents/Doario%20Mail%20Room/...
-    //   -> Doario Mail Room/2026/04 - April/filename.pdf
+    // Private helpers
     // -------------------------------------------------------------------------
 
     private static string ExtractPathFromUrl(string webUrl)
     {
-        // Decode and find the path after "Shared Documents/"
         var decoded = Uri.UnescapeDataString(webUrl);
         var marker = "Shared Documents/";
         var idx = decoded.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
 
         if (idx < 0)
         {
-            // Fallback — try "Documents/"
             marker = "Documents/";
             idx = decoded.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
         }
@@ -159,10 +199,6 @@ public class SharePointService
         return decoded[(idx + marker.Length)..];
     }
 
-    // -------------------------------------------------------------------------
-    // Site ID resolution — cached in DB after first call
-    // -------------------------------------------------------------------------
-
     private async Task<string> ResolveSiteIdAsync(
         Tenant tenant,
         CancellationToken cancellationToken)
@@ -173,10 +209,6 @@ public class SharePointService
         if (string.IsNullOrWhiteSpace(tenant.SharePointSiteUrl))
             throw new InvalidOperationException(
                 $"Tenant {tenant.TenantId} has no SharePointSiteUrl configured.");
-
-        _logger.LogInformation(
-            "Tenant {TenantId} — resolving SharePoint Site ID for the first time.",
-            tenant.TenantId);
 
         var uri = new Uri(tenant.SharePointSiteUrl);
         var hostname = uri.Host;
@@ -191,22 +223,13 @@ public class SharePointService
 
         if (site?.Id is null)
             throw new InvalidOperationException(
-                $"SharePoint site not found for tenant {tenant.TenantId}. " +
-                $"Check SharePointSiteUrl: {tenant.SharePointSiteUrl}");
+                $"SharePoint site not found for tenant {tenant.TenantId}.");
 
         tenant.SharePointSiteId = site.Id;
         await _db.SaveChangesAsync(cancellationToken);
 
-        _logger.LogInformation(
-            "Tenant {TenantId} — Site ID resolved and saved: {SiteId}",
-            tenant.TenantId, site.Id);
-
         return site.Id;
     }
-
-    // -------------------------------------------------------------------------
-    // Drive resolution — find or create "Doario Mail Room" library
-    // -------------------------------------------------------------------------
 
     private async Task<string> GetOrCreateDriveAsync(
         string siteId,
@@ -223,10 +246,6 @@ public class SharePointService
 
         if (drive?.Id is not null)
             return drive.Id;
-
-        _logger.LogInformation(
-            "Library '{Library}' not found on site {SiteId} — creating it.",
-            library, siteId);
 
         await _graph.Sites[siteId].Lists
             .PostAsync(new Microsoft.Graph.Models.List
@@ -248,18 +267,10 @@ public class SharePointService
 
         if (createdDrive?.Id is null)
             throw new InvalidOperationException(
-                $"Created library '{library}' on site {siteId} but could not resolve its Drive ID.");
-
-        _logger.LogInformation(
-            "Library '{Library}' created successfully on site {SiteId}.",
-            library, siteId);
+                $"Created library '{library}' but could not resolve its Drive ID.");
 
         return createdDrive.Id;
     }
-
-    // -------------------------------------------------------------------------
-    // Simple upload — files 4 MB and under
-    // -------------------------------------------------------------------------
 
     private async Task<string> SimpleUploadAsync(
         string driveId,
@@ -284,10 +295,6 @@ public class SharePointService
 
         return item.WebUrl;
     }
-
-    // -------------------------------------------------------------------------
-    // Large file upload — chunked, files over 4 MB
-    // -------------------------------------------------------------------------
 
     private async Task<string> LargeFileUploadAsync(
         string driveId,
@@ -325,8 +332,7 @@ public class SharePointService
         var result = await fileUploadTask.UploadAsync();
 
         if (!result.UploadSucceeded || result.ItemResponse?.WebUrl is null)
-            throw new InvalidOperationException(
-                "Large file upload to SharePoint failed.");
+            throw new InvalidOperationException("Large file upload to SharePoint failed.");
 
         return result.ItemResponse.WebUrl;
     }

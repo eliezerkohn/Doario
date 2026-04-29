@@ -5,11 +5,6 @@ using DoarioScan.Models;
 
 namespace DoarioScan;
 
-/// <summary>
-/// Tiny HTTP server listening on localhost:5100.
-/// The Doario portal calls this to trigger scans and get scanner info.
-/// Only accepts connections from localhost — never exposed to the network.
-/// </summary>
 public class LocalApiServer
 {
     private readonly ScannerService _scannerService;
@@ -23,8 +18,6 @@ public class LocalApiServer
         _scannerService = scannerService;
         _settingsService = settingsService;
     }
-
-    // ── Start / Stop ──────────────────────────────────────────────
 
     public void Start()
     {
@@ -40,15 +33,9 @@ public class LocalApiServer
 
     public void Stop()
     {
-        try
-        {
-            _cts?.Cancel();
-            _listener?.Stop();
-        }
+        try { _cts?.Cancel(); _listener?.Stop(); }
         catch { }
     }
-
-    // ── Request loop ──────────────────────────────────────────────
 
     private async Task ListenAsync(CancellationToken ct)
     {
@@ -86,25 +73,13 @@ public class LocalApiServer
         {
             switch (path)
             {
-                case "/health":
-                    await HandleHealth(req, res);
-                    break;
-
-                case "/scanners":
-                    await HandleScanners(req, res);
-                    break;
-
-                case "/scan":
-                    await HandleScan(req, res);
-                    break;
-
-                case "/upload":
-                    await HandleUpload(req, res);
-                    break;
-
-                default:
-                    await WriteJson(res, 404, new { error = "Not found" });
-                    break;
+                case "/health": await HandleHealth(req, res); break;
+                case "/scanners": await HandleScanners(req, res); break;
+                case "/scan": await HandleScan(req, res); break;
+                case "/upload": await HandleUpload(req, res); break;
+                case "/confirm": await HandleConfirm(req, res); break;
+                case "/rescan": await HandleRescan(req, res); break;
+                default: await WriteJson(res, 404, new { error = "Not found" }); break;
             }
         }
         catch (Exception ex)
@@ -116,8 +91,6 @@ public class LocalApiServer
             res.Close();
         }
     }
-
-    // ── Endpoint handlers ─────────────────────────────────────────
 
     private async Task HandleHealth(HttpListenerRequest req, HttpListenerResponse res)
     {
@@ -143,7 +116,6 @@ public class LocalApiServer
             await WriteJson(res, 405, new { error = "Method not allowed" });
             return;
         }
-
         var scanners = _scannerService.GetAvailableScanners();
         await WriteJson(res, 200, new { scanners });
     }
@@ -167,10 +139,7 @@ public class LocalApiServer
                     new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
                   ?? new ScanRequest();
         }
-        catch
-        {
-            scanRequest = new ScanRequest();
-        }
+        catch { scanRequest = new ScanRequest(); }
 
         var response = await _scannerService.ScanAsync(scanRequest);
         var statusCode = response.Success ? 200 : 500;
@@ -179,9 +148,8 @@ public class LocalApiServer
 
     /// <summary>
     /// POST /upload
-    /// Receives scanned pages from the portal, attaches the API key,
-    /// and forwards to the Doario backend.
-    /// The API key never touches the browser — stays in Bridge settings only.
+    /// Portal sends all scanned pages.
+    /// Bridge forwards to scan-batch which returns AI split preview — no upload yet.
     /// </summary>
     private async Task HandleUpload(HttpListenerRequest req, HttpListenerResponse res)
     {
@@ -190,7 +158,48 @@ public class LocalApiServer
             await WriteJson(res, 405, new { error = "Method not allowed" });
             return;
         }
+        await ForwardToBackend(req, res, "api/ingest/scan-batch");
+    }
 
+    /// <summary>
+    /// POST /confirm
+    /// Portal sends confirmed pages for one document.
+    /// Bridge forwards to scan-confirm which builds PDF, uploads to SharePoint, creates DB record.
+    /// </summary>
+    private async Task HandleConfirm(HttpListenerRequest req, HttpListenerResponse res)
+    {
+        if (req.HttpMethod != "POST")
+        {
+            await WriteJson(res, 405, new { error = "Method not allowed" });
+            return;
+        }
+        await ForwardToBackend(req, res, "api/ingest/scan-confirm");
+    }
+
+    /// <summary>
+    /// POST /rescan
+    /// Portal sends new pages for a document being rescanned.
+    /// Bridge forwards to scan-replace which cleans up old file if needed
+    /// and returns new pages to portal for re-review.
+    /// </summary>
+    private async Task HandleRescan(HttpListenerRequest req, HttpListenerResponse res)
+    {
+        if (req.HttpMethod != "POST")
+        {
+            await WriteJson(res, 405, new { error = "Method not allowed" });
+            return;
+        }
+        await ForwardToBackend(req, res, "api/ingest/scan-replace");
+    }
+
+    /// <summary>
+    /// Shared helper — reads body, attaches API key, forwards to backend endpoint.
+    /// </summary>
+    private async Task ForwardToBackend(
+        HttpListenerRequest req,
+        HttpListenerResponse res,
+        string backendPath)
+    {
         var settings = _settingsService.Load();
 
         if (string.IsNullOrWhiteSpace(settings.ApiKey))
@@ -215,12 +224,11 @@ public class LocalApiServer
 
             var content = new StringContent(body, Encoding.UTF8, "application/json");
             var response = await client.PostAsync(
-                $"{settings.ApiBaseUrl.TrimEnd('/')}/api/ingest/scan-batch", content);
+                $"{settings.ApiBaseUrl.TrimEnd('/')}/{backendPath}", content);
 
             var responseBody = await response.Content.ReadAsStringAsync();
-
-            // Forward the backend response directly back to the portal
             var bytes = Encoding.UTF8.GetBytes(responseBody);
+
             res.StatusCode = (int)response.StatusCode;
             res.ContentType = "application/json";
             res.ContentLength64 = bytes.Length;
@@ -231,8 +239,6 @@ public class LocalApiServer
             await WriteJson(res, 500, new { error = ex.Message });
         }
     }
-
-    // ── Helper ────────────────────────────────────────────────────
 
     private async Task WriteJson(HttpListenerResponse res, int statusCode, object data)
     {

@@ -17,10 +17,13 @@ const folders = [
     { name: 'Unassigned', icon: '📋', showCount: true, canMarkAllRead: false, group: 'Main' },
     { name: 'Assigned', icon: '✅', showCount: false, canMarkAllRead: false, group: 'Main' },
     { name: 'Actioned', icon: '☑️', showCount: false, canMarkAllRead: false, group: 'Main' },
-    { name: 'Scan', icon: '🖨️', showCount: false, canMarkAllRead: false, group: 'Tools' },
-    { name: 'Search by Staff', icon: '🔍', showCount: false, canMarkAllRead: false, group: 'Tools' },
+    { name: 'Search by Staff', icon: '👤', showCount: false, canMarkAllRead: false, group: 'Tools' },
+    { name: 'Search by Sender', icon: '✉️', showCount: false, canMarkAllRead: false, group: 'Tools' },
+    { name: 'Search Checks', icon: '🔍', showCount: false, canMarkAllRead: false, group: 'Tools' },
     { name: 'Spam', icon: '🚫', showCount: true, canMarkAllRead: false, group: 'Filtered' },
     { name: 'Promotions', icon: '📢', showCount: true, canMarkAllRead: false, group: 'Filtered' },
+    { name: 'Trash', icon: '🗑️', showCount: false, canMarkAllRead: false, group: 'Filtered' },
+    { name: 'Checks', icon: '💰', showCount: true, canMarkAllRead: false, group: 'Filtered' },
 ];
 
 // Folders that navigate to a separate page instead of filtering the mail list

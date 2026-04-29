@@ -9,12 +9,10 @@ public class DocumentRepository : IDocumentRepository
 
     public DocumentRepository(DoarioDataContext db) => _db = db;
 
-    // Background services — no tenant filter
     public async Task<Document> GetByIdAsync(Guid documentId)
         => await _db.Documents
             .FirstOrDefaultAsync(d => d.DocumentId == documentId);
 
-    // Controllers — always filter by tenant
     public async Task<Document> GetByIdAsync(Guid documentId, Guid tenantId)
         => await _db.Documents
             .FirstOrDefaultAsync(d => d.DocumentId == documentId
@@ -30,6 +28,7 @@ public class DocumentRepository : IDocumentRepository
         => await _db.Documents
             .Where(d => d.TenantId == tenantId)
             .Include(d => d.DocumentStatus)
+            .Include(d => d.Sender)
             .OrderByDescending(d => d.UploadedAt)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
@@ -71,6 +70,57 @@ public class DocumentRepository : IDocumentRepository
         await _db.SaveChangesAsync();
         return document;
     }
+
+    public async Task DeleteAsync(Guid documentId)
+    {
+        var doc = await _db.Documents.FindAsync(documentId);
+        if (doc is null) return;
+        _db.Documents.Remove(doc);
+        await _db.SaveChangesAsync();
+    }
+
+    public async Task UpdateSenderIdAsync(Guid documentId, Guid senderId)
+    {
+        var doc = await _db.Documents.FindAsync(documentId);
+        if (doc is null) return;
+        doc.SenderId = senderId;
+        await _db.SaveChangesAsync();
+    }
+
+    public async Task<List<Document>> GetBySenderAsync(Guid tenantId, string query)
+    {
+        var q = query.Trim();
+        return await _db.Documents
+            .Include(d => d.DocumentStatus)
+            .Include(d => d.Sender)
+            .Where(d => d.TenantId == tenantId &&
+                        d.Sender != null &&
+                        (d.Sender.DisplayName.Contains(q) ||
+                         d.Sender.Email.Contains(q)))
+            .OrderByDescending(d => d.UploadedAt)
+            .ToListAsync();
+    }
+
+    /// <summary>
+    /// Returns one entry per unique sender seen at this tenant.
+    /// Queries the Sender table directly — accurate and deduplicated.
+    /// Only includes senders that have at least one document.
+    /// </summary>
+    public async Task<List<SenderSummary>> GetDistinctSendersAsync(Guid tenantId)
+        => await _db.Senders
+            .Where(s => s.TenantId == tenantId &&
+                        s.DisplayName != "Unknown Sender" &&
+                        s.EndDate > DateTime.UtcNow)
+            .Select(s => new SenderSummary
+            {
+                DisplayName = s.DisplayName,
+                Email = s.Email,
+                DocumentCount = _db.Documents.Count(d =>
+                    d.TenantId == tenantId && d.SenderId == s.SenderId)
+            })
+            .Where(s => s.DocumentCount > 0)
+            .OrderBy(s => s.DisplayName == string.Empty ? s.Email : s.DisplayName)
+            .ToListAsync();
 
     public async Task SaveAsync()
         => await _db.SaveChangesAsync();

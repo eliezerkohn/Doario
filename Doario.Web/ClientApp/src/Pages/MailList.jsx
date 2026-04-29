@@ -42,12 +42,23 @@ const MailList = ({ docs, selected, loading, folder, onSelect, onMarkUnread }) =
             </div>
 
             <div style={styles.searchWrap}>
-                <input
-                    style={styles.search}
-                    placeholder="Search mail…"
-                    value={search}
-                    onChange={e => setSearch(e.target.value)}
-                />
+                <div style={styles.searchRow}>
+                    <input
+                        style={styles.search}
+                        placeholder="Search mail…"
+                        value={search}
+                        onChange={e => setSearch(e.target.value)}
+                    />
+                    {search && (
+                        <button
+                            style={styles.clearBtn}
+                            onClick={() => setSearch('')}
+                            title="Clear search"
+                        >
+                            ✕
+                        </button>
+                    )}
+                </div>
             </div>
 
             <div style={styles.list}>
@@ -61,6 +72,8 @@ const MailList = ({ docs, selected, loading, folder, onSelect, onMarkUnread }) =
                     const plain = stripMarkup(doc.aiSummary);
                     const hasOcr = !!doc.ocrText;
                     const hasSummary = !!doc.aiSummary;
+                    const senderLabel = doc.senderDisplayName || doc.senderEmail || 'Unknown Sender';
+                    const isCheck = !!doc.isCheck;
 
                     return (
                         <div
@@ -75,11 +88,14 @@ const MailList = ({ docs, selected, loading, folder, onSelect, onMarkUnread }) =
                             <div style={styles.itemBody}>
                                 <div style={styles.itemTop}>
                                     <span style={{ ...styles.sender, fontWeight: isViewed ? 500 : 700 }}>
-                                        {doc.senderDisplayName || 'Unknown Sender'}
+                                        {senderLabel}
                                     </span>
                                     <span style={styles.date}>{formatDate(doc.uploadedAt)}</span>
                                 </div>
-                                <div style={styles.filename}>{doc.originalFileName}</div>
+                                <div style={styles.itemFilenameRow}>
+                                    <span style={styles.filename}>{doc.originalFileName}</span>
+                                    {isCheck && <span style={styles.checkBadge}>💰 Check</span>}
+                                </div>
                                 <div style={styles.preview}>
                                     {hasSummary
                                         ? plain.substring(0, 80) + (plain.length > 80 ? '…' : '')
@@ -87,7 +103,6 @@ const MailList = ({ docs, selected, loading, folder, onSelect, onMarkUnread }) =
                                 </div>
                             </div>
 
-                            {/* ··· menu */}
                             <div style={styles.rowMenu} onClick={e => e.stopPropagation()}>
                                 <button
                                     style={styles.rowMenuBtn}
@@ -133,12 +148,32 @@ const styles = {
         background: '#f0f4f8', padding: '2px 9px', borderRadius: 20,
     },
     searchWrap: { padding: '10px 12px 8px' },
+    searchRow: {
+        position: 'relative',
+        display: 'flex',
+        alignItems: 'center',
+    },
     search: {
         width: '100%', background: '#f0f4f8',
         border: '1px solid #e2eaef', color: '#1a2e3b',
-        padding: '8px 12px', borderRadius: 8, fontSize: 12,
+        padding: '8px 32px 8px 12px', borderRadius: 8, fontSize: 12,
         outline: 'none', fontFamily: 'inherit',
         boxSizing: 'border-box',
+    },
+    clearBtn: {
+        position: 'absolute',
+        right: 8,
+        background: 'transparent',
+        border: 'none',
+        cursor: 'pointer',
+        fontSize: 11,
+        color: '#6b8499',
+        padding: '2px 4px',
+        borderRadius: 4,
+        lineHeight: 1,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
     },
     list: { flex: 1, overflowY: 'auto' },
     empty: { padding: '40px 20px', textAlign: 'center', color: '#6b8499', fontSize: 13 },
@@ -153,7 +188,9 @@ const styles = {
     itemTop: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 6, marginBottom: 3 },
     sender: { fontSize: 12, color: '#1a2e3b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 160 },
     date: { fontSize: 10, color: '#6b8499', flexShrink: 0 },
-    filename: { fontSize: 11, color: '#6b8499', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: 2 },
+    itemFilenameRow: { display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 },
+    filename: { fontSize: 11, color: '#6b8499', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+    checkBadge: { fontSize: 10, fontWeight: 700, background: '#fef3c7', color: '#92400e', padding: '1px 7px', borderRadius: 20, flexShrink: 0 },
     preview: { fontSize: 11, color: '#6b8499', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
     rowMenu: { position: 'relative', flexShrink: 0, display: 'flex', alignItems: 'center' },
     rowMenuBtn: {

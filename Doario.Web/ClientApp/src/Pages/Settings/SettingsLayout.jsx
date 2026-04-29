@@ -8,6 +8,7 @@ const tabs = [
     { label: 'Staff', path: '/settings/staff', icon: '👥' },
     { label: 'Integrations', path: '/settings/integrations', icon: '🔌' },
     { label: 'Subscription', path: '/settings/subscription', icon: '💳' },
+    { label: 'Extraction Fields', path: '/settings/extraction-fields', icon: '🔍' },
 ];
 
 export default function SettingsLayout() {

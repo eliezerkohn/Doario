@@ -31,13 +31,7 @@ public class FeedbackController : ControllerBase
     /// <summary>
     /// POST /api/feedback/not-spam
     /// Called when admin clicks "Not Spam" on a spam-classified document.
-    ///
     /// Spam is SENDER-based — the sender itself is the problem, not the message.
-    /// So we:
-    ///   1. Move document back to Unassigned
-    ///   2. Record correction in DocumentFeedback for AI learning
-    ///   3. Whitelist the sender permanently — future messages from this sender
-    ///      skip AI classification entirely and always land in Unassigned
     /// </summary>
     [HttpPost("not-spam")]
     public async Task<IActionResult> MarkNotSpam([FromBody] FeedbackRequest request)
@@ -68,9 +62,9 @@ public class FeedbackController : ControllerBase
         });
 
         // 3. Whitelist sender permanently
-        // Spam = sender-based problem, so block the sender for all future messages
-        var senderIdentifier = !string.IsNullOrWhiteSpace(doc.SenderDisplayName)
-            ? doc.SenderDisplayName.Trim()
+        // Use resolved Sender.DisplayName first, fall back to request param
+        var senderIdentifier = !string.IsNullOrWhiteSpace(doc.Sender?.DisplayName)
+            ? doc.Sender.DisplayName.Trim()
             : !string.IsNullOrWhiteSpace(request.SenderIdentifier)
                 ? request.SenderIdentifier.Trim()
                 : null;
@@ -107,13 +101,7 @@ public class FeedbackController : ControllerBase
     /// <summary>
     /// POST /api/feedback/not-promotion
     /// Called when admin clicks "This is real mail" on a promotion-classified document.
-    ///
-    /// Promotion is CONTENT-based — the same sender may send real mail next time.
-    /// So we:
-    ///   1. Move document back to Unassigned
-    ///   2. Record correction in DocumentFeedback for AI learning
-    ///   NO sender whitelisting — the sender is not the problem, this specific
-    ///   message was just misclassified. The AI learns from the content correction.
+    /// Promotion is CONTENT-based — no sender whitelisting.
     /// </summary>
     [HttpPost("not-promotion")]
     public async Task<IActionResult> MarkNotPromotion([FromBody] FeedbackRequest request)
@@ -125,11 +113,8 @@ public class FeedbackController : ControllerBase
         if (doc is null)
             return NotFound();
 
-        // 1. Move back to Unassigned
         await _documents.UpdateStatusAsync(request.DocumentId, 1);
 
-        // 2. Record correction for AI learning
-        // No sender whitelisting — promotion is content-based, not sender-based
         var snippet = string.IsNullOrWhiteSpace(doc.OcrText) ? string.Empty
             : doc.OcrText.Length > 500 ? doc.OcrText[..500] : doc.OcrText;
 
@@ -154,5 +139,5 @@ public class FeedbackController : ControllerBase
 public class FeedbackRequest
 {
     public Guid DocumentId { get; set; }
-    public string SenderIdentifier { get; set; } // optional — used if SenderDisplayName is empty
+    public string SenderIdentifier { get; set; }
 }

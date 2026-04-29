@@ -5,6 +5,8 @@ import axios from 'axios';
 import MailSidebar from './MailSidebar';
 import MailList from './MailList';
 import MailSearch from './MailSearch';
+import SenderSearch from './SenderSearch';
+import ChecksSearch from './ChecksSearch';
 import MailReader from './MailReader';
 import AssignModal from './AssignModal';
 
@@ -78,12 +80,17 @@ const MailPortal = () => {
         'Actioned': [4],
         'Spam': [7],
         'Promotions': [8],
+        'Trash': [9],
     };
 
-    const folderDocs = docs.filter(d => (folderStatusMap[folder] ?? [1]).includes(d.statusId));
+    const isChecksFolder = folder === 'Checks';
+    const isChecksSearch = folder === 'Search Checks';
+
+    const folderDocs = isChecksFolder
+        ? docs.filter(d => d.isCheck)
+        : docs.filter(d => (folderStatusMap[folder] ?? [1]).includes(d.statusId));
     const inboxDocs = docs.filter(d => [1, 2].includes(d.statusId));
 
-    // Unread = inbox docs that have no DocumentViewed row (isViewed = false from API)
     const unviewedCount = inboxDocs.filter(d => !d.isViewed).length;
 
     const counts = {
@@ -93,6 +100,8 @@ const MailPortal = () => {
         'Actioned': docs.filter(d => d.statusId === 4).length,
         'Spam': docs.filter(d => d.statusId === 7).length,
         'Promotions': docs.filter(d => d.statusId === 8).length,
+        'Trash': docs.filter(d => d.statusId === 9).length,
+        'Checks': docs.filter(d => d.isCheck).length,
     };
 
     // ── Handlers ───────────────────────────────────────────────────────────────
@@ -125,15 +134,17 @@ const MailPortal = () => {
         );
     };
 
-    // When admin clicks a document — mark as viewed in DB
+    const handleDeleted = (documentId) => {
+        setDocs(prev => prev.filter(d => d.documentId !== documentId));
+        setSelected(prev => prev?.documentId === documentId ? null : prev);
+    };
+
     const handleSelect = async (doc) => {
         setSelected(doc);
 
-        // Only call API if not already viewed
         if (!doc.isViewed) {
             try {
                 await axios.post('/api/admin/mark-viewed', { documentId: doc.documentId });
-                // Update local state immediately so badge drops without waiting for poll
                 setDocs(prev => prev.map(d =>
                     d.documentId === doc.documentId ? { ...d, isViewed: true } : d
                 ));
@@ -141,7 +152,6 @@ const MailPortal = () => {
         }
     };
 
-    // Mark as unread — removes DocumentViewed row for the whole tenant
     const handleMarkUnread = async (documentId) => {
         try {
             await axios.post('/api/admin/mark-unread', { documentId });
@@ -151,10 +161,8 @@ const MailPortal = () => {
         } catch { /* silent */ }
     };
 
-    // Mark all inbox docs as read
     const handleMarkAllRead = async () => {
         const unread = inboxDocs.filter(d => !d.isViewed);
-        // Fire all mark-viewed calls in parallel
         await Promise.allSettled(
             unread.map(d => axios.post('/api/admin/mark-viewed', { documentId: d.documentId }))
         );
@@ -165,6 +173,10 @@ const MailPortal = () => {
 
     // ── Render ─────────────────────────────────────────────────────────────────
 
+    const isStaffSearch = folder === 'Search by Staff';
+    const isSenderSearch = folder === 'Search by Sender';
+    const isSearch = isStaffSearch || isSenderSearch || isChecksSearch;
+
     return (
         <div style={styles.root}>
             <MailSidebar
@@ -173,13 +185,30 @@ const MailPortal = () => {
                 counts={counts}
                 onMarkAllRead={handleMarkAllRead}
             />
-            {folder === 'Search by Staff' ? (
+
+            {isStaffSearch && (
                 <MailSearch
                     staff={staff}
                     selected={selected}
                     onSelect={handleSelect}
                 />
-            ) : (
+            )}
+
+            {isSenderSearch && (
+                <SenderSearch
+                    selected={selected}
+                    onSelect={handleSelect}
+                />
+            )}
+
+            {isChecksSearch && (
+                <ChecksSearch
+                    selected={selected}
+                    onSelect={handleSelect}
+                />
+            )}
+
+            {!isSearch && !isChecksSearch && (
                 <MailList
                     docs={folderDocs}
                     selected={selected}
@@ -189,13 +218,16 @@ const MailPortal = () => {
                     onMarkUnread={handleMarkUnread}
                 />
             )}
+
             <MailReader
                 doc={selected}
                 staff={staff}
                 onAssign={setAssigningDoc}
                 localAssigned={localAssigned}
                 onStatusChanged={handleStatusChanged}
+                onDeleted={handleDeleted}
             />
+
             {assigningDoc && (
                 <AssignModal
                     doc={assigningDoc}

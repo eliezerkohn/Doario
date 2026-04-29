@@ -11,17 +11,20 @@ namespace Doario.Web.Controllers;
 public class AssignmentController : ControllerBase
 {
     private readonly IAssignmentRepository _assignments;
+    private readonly IDeliveryRepository _deliveries;
     private readonly IStaffRepository _staff;
     private readonly TenantContext _tenant;
     private readonly AssignmentService _assignmentService;
 
     public AssignmentController(
         IAssignmentRepository assignments,
+        IDeliveryRepository deliveries,
         IStaffRepository staff,
         TenantContext tenant,
         AssignmentService assignmentService)
     {
         _assignments = assignments;
+        _deliveries = deliveries;
         _staff = staff;
         _tenant = tenant;
         _assignmentService = assignmentService;
@@ -78,18 +81,35 @@ public class AssignmentController : ControllerBase
         var assignment = await _assignments.GetByDocumentAsync(documentId, _tenant.TenantId);
         if (assignment is null) return Ok(null);
 
+        var deliveries = await _deliveries.GetByAssignmentIdsAsync(
+            new List<Guid> { assignment.DocumentAssignmentId });
+
+        var latest = deliveries
+            .OrderByDescending(d => d.CreatedAt)
+            .FirstOrDefault();
+
+        var deliveryStatus = latest?.SystemStatusId switch
+        {
+            8 => "sent",
+            5 => "failed",
+            9 => "permanent_fail",
+            7 => "pending",
+            _ => "unknown"
+        };
+
         return Ok(new
         {
             assignment.DocumentAssignmentId,
             assignment.AssignedToEmail,
             StaffName = $"{assignment.AssignedToStaff.FirstName} {assignment.AssignedToStaff.LastName}",
             assignment.AssignedAt,
-            assignment.Note
+            assignment.Note,
+            DeliveryStatus = deliveryStatus,
+            DeliveryError = latest?.ErrorMessage
         });
     }
 
     // GET /api/assignment/by-email?email=sarah@specialtyrx.com
-    // Returns ALL documents ever assigned to this email — every status
     [HttpGet("by-email")]
     public async Task<IActionResult> GetByEmail([FromQuery] string email)
     {
@@ -105,8 +125,8 @@ public class AssignmentController : ControllerBase
             a.Document.UploadedAt,
             a.Document.OriginalFileName,
             a.Document.SharePointUrl,
-            a.Document.SenderDisplayName,
-            a.Document.SenderEmail,
+            SenderDisplayName = a.Document.Sender != null ? a.Document.Sender.DisplayName : string.Empty,
+            SenderEmail = a.Document.Sender != null ? a.Document.Sender.Email : string.Empty,
             a.Document.AiSummary,
             a.Document.OcrText,
             StatusId = a.Document.DocumentStatusId,
@@ -115,7 +135,7 @@ public class AssignmentController : ControllerBase
             a.AssignedToEmail,
             AssignedToName = $"{a.AssignedToStaff.FirstName} {a.AssignedToStaff.LastName}",
             a.Note,
-            IsViewed = false  // search results always fresh — no viewed state
+            IsViewed = false
         });
 
         return Ok(result);

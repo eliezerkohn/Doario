@@ -38,18 +38,6 @@ namespace Doario.Data.Models.Mail
         /// </summary>
         public string OcrText { get; set; }
 
-        [Required, MaxLength(200)]
-        public string SenderDisplayName { get; set; }
-
-        /// <summary>
-        /// Email address extracted from the document by AI.
-        /// Empty string if not found.
-        /// Displayed to staff in delivery email as a clickable contact link.
-        /// Fed back into Senders table when admin confirms sender identity.
-        /// </summary>
-        [MaxLength(200)]
-        public string SenderEmail { get; set; }
-
         /// <summary>
         /// AI confidence score for sender identification 0.00-1.00.
         /// Separate from DocumentAssignment.AIConfidence which tracks

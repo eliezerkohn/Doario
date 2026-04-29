@@ -15,23 +15,26 @@ public class IngestController : ControllerBase
     private readonly IDocumentRepository _documentRepo;
     private readonly IErrorLogRepository _errorLogRepo;
     private readonly OcrService _ocrService;
-    private readonly AiSummaryService _aiSummaryService;
     private readonly SharePointService _sharePointService;
+    private readonly PdfService _pdfService;
+    private readonly AiBatchSplitService _aiBatchSplitService;
 
     public IngestController(
         ITenantRepository tenantRepo,
         IDocumentRepository documentRepo,
         IErrorLogRepository errorLogRepo,
         OcrService ocrService,
-        AiSummaryService aiSummaryService,
-        SharePointService sharePointService)
+        SharePointService sharePointService,
+        PdfService pdfService,
+        AiBatchSplitService aiBatchSplitService)
     {
         _tenantRepo = tenantRepo;
         _documentRepo = documentRepo;
         _errorLogRepo = errorLogRepo;
         _ocrService = ocrService;
-        _aiSummaryService = aiSummaryService;
         _sharePointService = sharePointService;
+        _pdfService = pdfService;
+        _aiBatchSplitService = aiBatchSplitService;
     }
 
     // GET /api/ingest/health
@@ -39,7 +42,6 @@ public class IngestController : ControllerBase
     public async Task<IActionResult> Health()
     {
         var apiKey = Request.Headers["X-Api-Key"].FirstOrDefault();
-
         if (string.IsNullOrWhiteSpace(apiKey))
             return Unauthorized(new { error = "Missing API key." });
 
@@ -47,15 +49,11 @@ public class IngestController : ControllerBase
         if (tenant == null)
             return Unauthorized(new { error = "Invalid API key." });
 
-        return Ok(new
-        {
-            status = "ok",
-            tenant = tenant.Name,
-            version = "1.0.0",
-        });
+        return Ok(new { status = "ok", tenant = tenant.Name, version = "1.0.0" });
     }
 
     // POST /api/ingest/scan
+    // Single document scan — all pages combined into one PDF, uploaded immediately.
     [HttpPost("scan")]
     public async Task<IActionResult> IngestScan([FromBody] IngestScanRequest request)
     {
@@ -72,13 +70,11 @@ public class IngestController : ControllerBase
 
         try
         {
-            // Upload first page as PNG — Day 15 replaces with proper PDF
-            var imageBytes = Convert.FromBase64String(request.Pages[0]);
-            var fileName = $"scan_{DateTime.UtcNow:yyyyMMdd_HHmmss}.png";
+            var fileName = $"scan_{DateTime.UtcNow:yyyyMMdd_HHmmss}.pdf";
 
-            using var stream = new MemoryStream(imageBytes);
+            using var pdfStream = _pdfService.BuildPdfStream(request.Pages);
             var sharePointUrl = await _sharePointService.UploadDocumentAsync(
-                tenant.TenantId, stream, fileName);
+                tenant.TenantId, pdfStream, fileName);
 
             var document = new Document
             {
@@ -90,8 +86,6 @@ public class IngestController : ControllerBase
                 SenderTypeId = tenant.UnknownSenderTypeId,
                 SenderId = tenant.UnknownSenderId,
                 UploadedByStaffId = tenant.SystemStaffId,
-                SenderDisplayName = "Scanner",
-                SenderEmail = string.Empty,
                 UploadedAt = DateTime.UtcNow,
             };
 
@@ -107,21 +101,17 @@ public class IngestController : ControllerBase
         }
         catch (Exception ex)
         {
-            await _errorLogRepo.AddAsync(new ErrorLog
-            {
-                ErrorLogId = Guid.NewGuid(),
-                TenantId = tenant.TenantId,
-                ErrorType = "Delivery",
-                Message = ex.Message,
-                StackTrace = ex.StackTrace,
-                CreatedAt = DateTime.UtcNow,
-            });
-
+            await LogError(tenant.TenantId, ex);
             return StatusCode(500, new { error = $"Failed to process scan: {ex.Message}" });
         }
     }
 
     // POST /api/ingest/scan-batch
+    // ── NEW FLOW ──────────────────────────────────────────────────────────────
+    // Receives all scanned pages.
+    // AI splits into document boundaries.
+    // Returns split preview to portal — NO SharePoint upload, NO DB record yet.
+    // Operator reviews, then calls scan-confirm to finalise.
     [HttpPost("scan-batch")]
     public async Task<IActionResult> IngestBatchScan([FromBody] IngestScanRequest request)
     {
@@ -138,139 +128,210 @@ public class IngestController : ControllerBase
 
         try
         {
-            var batchScanId = Guid.NewGuid();
-            var documents = new List<BatchDocumentResult>();
-            var boundaries = DetectDocumentBoundaries(request.Pages);
+            // ── Step 1: OCR each page for AI boundary detection ───────────────
+            // Runs Azure Document Intelligence on each raw PNG image in parallel.
+            // Empty string = blank page (OCR returned nothing = blank sheet).
+            // Real text = content the AI uses to detect document boundaries.
+            // No SharePoint involved — images stay in memory.
+            var ocrTasks = request.Pages.Select(p => _ocrService.OcrPageAsync(p));
+            var pageTexts = (await Task.WhenAll(ocrTasks)).ToList();
 
-            foreach (var boundary in boundaries)
+            var boundaries = await _aiBatchSplitService.DetectBoundariesAsync(pageTexts);
+
+            var batchScanId = Guid.NewGuid().ToString();
+
+            var documents = boundaries.Select((b, i) =>
             {
-                var pages = request.Pages.GetRange(boundary.StartPage, boundary.PageCount);
+                var docPages = request.Pages
+                    .Skip(b.StartPage)
+                    .Take(b.PageCount)
+                    .ToList();
 
-                // Upload first page as PNG — Day 15 replaces with proper multi-page PDF
-                var imageBytes = Convert.FromBase64String(pages[0]);
-                var fileName = $"scan_{DateTime.UtcNow:yyyyMMdd_HHmmss}_{boundary.Index + 1}.png";
-
-                using var stream = new MemoryStream(imageBytes);
-                var sharePointUrl = await _sharePointService.UploadDocumentAsync(
-                    tenant.TenantId, stream, fileName);
-
-                var document = new Document
+                return new
                 {
-                    DocumentId = Guid.NewGuid(),
-                    TenantId = tenant.TenantId,
-                    OriginalFileName = fileName,
-                    SharePointUrl = sharePointUrl,
-                    DocumentStatusId = 1,
-                    SenderTypeId = tenant.UnknownSenderTypeId,
-                    SenderId = tenant.UnknownSenderId,
-                    UploadedByStaffId = tenant.SystemStaffId,
-                    SenderDisplayName = "Scanner",
-                    SenderEmail = string.Empty,
-                    BatchScanId = batchScanId,
-                    BatchPageStart = boundary.StartPage + 1,
-                    BatchPageEnd = boundary.StartPage + boundary.PageCount,
-                    UploadedAt = DateTime.UtcNow,
+                    tempId = Guid.NewGuid().ToString(),  // client-side ID only, no DB
+                    index = i,
+                    pageStart = b.StartPage + 1,
+                    pageEnd = b.StartPage + b.PageCount,
+                    pageCount = b.PageCount,
+                    pages = docPages,                   // all base64 pages for this doc
+                    previewBase64 = docPages.FirstOrDefault(),  // first page as thumbnail
                 };
-
-                await _documentRepo.CreateAsync(document);
-                _ocrService.RunInBackground(document.DocumentId);
-
-                documents.Add(new BatchDocumentResult
-                {
-                    DocumentId = document.DocumentId,
-                    SharePointUrl = sharePointUrl,
-                    PageStart = document.BatchPageStart.Value,
-                    PageEnd = document.BatchPageEnd.Value,
-                    FileName = fileName,
-                    PreviewBase64 = pages[0],
-                });
-            }
+            }).ToList();
 
             return Ok(new
             {
                 batchScanId,
                 documentCount = documents.Count,
                 documents,
-                message = $"{documents.Count} document{(documents.Count != 1 ? "s" : "")} detected. OCR and AI summaries in progress.",
+                message = $"{documents.Count} document{(documents.Count != 1 ? "s" : "")} detected. Review and confirm to save.",
             });
         }
         catch (Exception ex)
         {
+            await LogError(tenant.TenantId, ex);
+            return StatusCode(500, new { error = $"Failed to split batch: {ex.Message}" });
+        }
+    }
+
+    // POST /api/ingest/scan-confirm
+    // ── NEW ENDPOINT ──────────────────────────────────────────────────────────
+    // Called when operator clicks Confirm on one or all documents.
+    // Receives the confirmed pages for one document.
+    // Builds PDF → uploads to SharePoint → creates DB record → fires OCR.
+    [HttpPost("scan-confirm")]
+    public async Task<IActionResult> IngestScanConfirm([FromBody] IngestConfirmRequest request)
+    {
+        var apiKey = Request.Headers["X-Api-Key"].FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(apiKey))
+            return Unauthorized(new { error = "Missing API key." });
+
+        var tenant = await _tenantRepo.GetByApiKeyAsync(apiKey);
+        if (tenant == null)
+            return Unauthorized(new { error = "Invalid API key." });
+
+        if (request?.Pages == null || request.Pages.Count == 0)
+            return BadRequest(new { error = "No pages received." });
+
+        try
+        {
+            var fileName = $"scan_{DateTime.UtcNow:yyyyMMdd_HHmmss}_{request.DocumentIndex + 1}.pdf";
+
+            using var pdfStream = _pdfService.BuildPdfStream(request.Pages);
+            var sharePointUrl = await _sharePointService.UploadDocumentAsync(
+                tenant.TenantId, pdfStream, fileName);
+
+            var batchScanId = string.IsNullOrWhiteSpace(request.BatchScanId)
+                ? (Guid?)null
+                : Guid.TryParse(request.BatchScanId, out var g) ? g : (Guid?)null;
+
+            var document = new Document
+            {
+                DocumentId = Guid.NewGuid(),
+                TenantId = tenant.TenantId,
+                OriginalFileName = fileName,
+                SharePointUrl = sharePointUrl,
+                DocumentStatusId = 1,
+                SenderTypeId = tenant.UnknownSenderTypeId,
+                SenderId = tenant.UnknownSenderId,
+                UploadedByStaffId = tenant.SystemStaffId,
+                BatchScanId = batchScanId,
+                BatchPageStart = request.PageStart,
+                BatchPageEnd = request.PageEnd,
+                UploadedAt = DateTime.UtcNow,
+            };
+
+            await _documentRepo.CreateAsync(document);
+            _ocrService.RunInBackground(document.DocumentId);
+
+            return Ok(new
+            {
+                documentId = document.DocumentId,
+                sharePointUrl = document.SharePointUrl,
+                message = "Document saved. OCR and AI summary in progress.",
+            });
+        }
+        catch (Exception ex)
+        {
+            await LogError(tenant.TenantId, ex);
+            return StatusCode(500, new { error = $"Failed to confirm document: {ex.Message}" });
+        }
+    }
+
+    // POST /api/ingest/scan-replace
+    // Rescan an individual document — replaces its pages in the preview.
+    // No SharePoint involved — returns new pages to portal for re-review.
+    // Old document only deleted from SharePoint if it was already confirmed
+    // (i.e. has a sharePointUrl passed in the request).
+    [HttpPost("scan-replace")]
+    public async Task<IActionResult> IngestScanReplace([FromBody] IngestReplaceRequest request)
+    {
+        var apiKey = Request.Headers["X-Api-Key"].FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(apiKey))
+            return Unauthorized(new { error = "Missing API key." });
+
+        var tenant = await _tenantRepo.GetByApiKeyAsync(apiKey);
+        if (tenant == null)
+            return Unauthorized(new { error = "Invalid API key." });
+
+        if (request?.Pages == null || request.Pages.Count == 0)
+            return BadRequest(new { error = "No pages received." });
+
+        try
+        {
+            // If this document was already confirmed and uploaded, delete the old file
+            if (!string.IsNullOrWhiteSpace(request.OldSharePointUrl))
+            {
+                await _sharePointService.DeleteFileAsync(
+                    tenant.TenantId, request.OldSharePointUrl);
+            }
+
+            // If it had a DB record, delete that too
+            if (request.OldDocumentId.HasValue && request.OldDocumentId.Value != Guid.Empty)
+            {
+                await _documentRepo.DeleteAsync(request.OldDocumentId.Value);
+            }
+
+            // Return new pages to portal — operator reviews before confirming again
+            return Ok(new
+            {
+                pages = request.Pages,
+                previewBase64 = request.Pages[0],
+                pageCount = request.Pages.Count,
+                message = "Rescan received. Review and confirm to save.",
+            });
+        }
+        catch (Exception ex)
+        {
+            await LogError(tenant.TenantId, ex);
+            return StatusCode(500, new { error = $"Failed to replace scan: {ex.Message}" });
+        }
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private async Task LogError(Guid tenantId, Exception ex)
+    {
+        try
+        {
             await _errorLogRepo.AddAsync(new ErrorLog
             {
                 ErrorLogId = Guid.NewGuid(),
-                TenantId = tenant.TenantId,
+                TenantId = tenantId,
                 ErrorType = "Delivery",
                 Message = ex.Message,
                 StackTrace = ex.StackTrace,
                 CreatedAt = DateTime.UtcNow,
             });
-
-            return StatusCode(500, new { error = $"Failed to process batch scan: {ex.Message}" });
         }
-    }
-
-    // ── Document boundary detection ───────────────────────────────
-
-    private List<DocumentBoundary> DetectDocumentBoundaries(List<string> pages)
-    {
-        var boundaries = new List<DocumentBoundary>();
-        var currentStart = 0;
-        var index = 0;
-
-        for (int i = 0; i < pages.Count; i++)
-        {
-            if (IsBlankPage(pages[i]) && i > currentStart)
-            {
-                boundaries.Add(new DocumentBoundary
-                {
-                    Index = index++,
-                    StartPage = currentStart,
-                    PageCount = i - currentStart,
-                });
-                currentStart = i + 1;
-            }
-        }
-
-        if (currentStart < pages.Count)
-        {
-            boundaries.Add(new DocumentBoundary
-            {
-                Index = index,
-                StartPage = currentStart,
-                PageCount = pages.Count - currentStart,
-            });
-        }
-
-        if (boundaries.Count == 0)
-        {
-            boundaries.Add(new DocumentBoundary
-            {
-                Index = 0,
-                StartPage = 0,
-                PageCount = pages.Count,
-            });
-        }
-
-        return boundaries;
-    }
-
-    private bool IsBlankPage(string base64Image)
-    {
-        try
-        {
-            var bytes = Convert.FromBase64String(base64Image);
-            return bytes.Length < 500;
-        }
-        catch { return false; }
+        catch { /* never let logging block the response */ }
     }
 }
 
-// ── Request / Response models ─────────────────────────────────────
+// ── Request models ────────────────────────────────────────────────
 
 public class IngestScanRequest
 {
     public List<string> Pages { get; set; } = new();
+}
+
+public class IngestConfirmRequest
+{
+    public List<string> Pages { get; set; } = new();
+    public string BatchScanId { get; set; }
+    public int DocumentIndex { get; set; }
+    public int? PageStart { get; set; }
+    public int? PageEnd { get; set; }
+}
+
+public class IngestReplaceRequest
+{
+    public List<string> Pages { get; set; } = new();
+    public Guid? OldDocumentId { get; set; }
+    public string OldSharePointUrl { get; set; }
+    public Guid? BatchScanId { get; set; }
+    public int? BatchPageStart { get; set; }
+    public int? BatchPageEnd { get; set; }
 }
 
 public class BatchDocumentResult

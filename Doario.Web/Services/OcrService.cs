@@ -27,6 +27,9 @@ public class OcrService
             new AzureKeyCredential(ocrOptions.Value.ApiKey));
     }
 
+    // ── Full OCR — runs after document is confirmed and saved ─────────────────
+    // Downloads from SharePoint, extracts all text, fires AI summary.
+
     public void RunInBackground(Guid documentId)
     {
         Task.Run(async () =>
@@ -50,7 +53,6 @@ public class OcrService
                     return;
                 }
 
-                // Download from SharePoint via Graph sharing URL
                 var fileStream = await DownloadFromSharePointAsync(doc.SharePointUrl);
                 if (fileStream is null)
                 {
@@ -58,7 +60,6 @@ public class OcrService
                     return;
                 }
 
-                // Run OCR — same call as original working version
                 var operation = await _docIntelligence.AnalyzeDocumentAsync(
                     WaitUntil.Completed,
                     "prebuilt-read",
@@ -66,7 +67,6 @@ public class OcrService
 
                 var result = operation.Value;
 
-                // Build extracted text from all pages
                 var pageLines = result.Pages.Select(page =>
                     string.Join(Environment.NewLine,
                         page.Lines?.Select(l => l.Content) ?? []));
@@ -75,7 +75,6 @@ public class OcrService
                     Environment.NewLine + Environment.NewLine,
                     pageLines);
 
-                // Append table content if present
                 if (result.Tables?.Count > 0)
                 {
                     var tableText = string.Join(
@@ -97,7 +96,6 @@ public class OcrService
                     "OcrService: OCR complete. Document {Id}, Characters {Count}",
                     documentId, extractedText.Length);
 
-                // Fire AI summary in background
                 aiSummaryService.RunInBackground(documentId);
             }
             catch (Exception ex)
@@ -105,6 +103,48 @@ public class OcrService
                 _logger.LogError(ex, "OcrService: OCR failed for Document {Id}.", documentId);
             }
         });
+    }
+
+    // ── Quick OCR on a raw base64 PNG — used for pre-split boundary detection ─
+    // Does NOT touch SharePoint or the DB.
+    // Returns extracted text, or empty string if the page appears blank or OCR fails.
+    // Called once per page in IngestController before AI splitting.
+
+    public async Task<string> OcrPageAsync(string base64Image)
+    {
+        if (string.IsNullOrWhiteSpace(base64Image))
+            return string.Empty;
+
+        try
+        {
+            var imageBytes = Convert.FromBase64String(base64Image);
+            using var stream = new MemoryStream(imageBytes);
+
+            var operation = await _docIntelligence.AnalyzeDocumentAsync(
+                WaitUntil.Completed,
+                "prebuilt-read",
+                BinaryData.FromStream(stream));
+
+            var result = operation.Value;
+
+            var lines = result.Pages
+                .SelectMany(p => p.Lines ?? [])
+                .Select(l => l.Content)
+                .Where(c => !string.IsNullOrWhiteSpace(c));
+
+            var text = string.Join(" ", lines).Trim();
+
+            _logger.LogDebug(
+                "OcrService.OcrPageAsync: extracted {Chars} characters.",
+                text.Length);
+
+            return text;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "OcrService.OcrPageAsync: OCR failed for page, treating as blank.");
+            return string.Empty;
+        }
     }
 
     // ── SharePoint download via Graph sharing URL ─────────────────────────────
@@ -131,7 +171,8 @@ public class OcrService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "OcrService: SharePoint download failed for URL {Url}.", sharePointWebUrl);
+            _logger.LogError(ex,
+                "OcrService: SharePoint download failed for URL {Url}.", sharePointWebUrl);
             return null;
         }
     }

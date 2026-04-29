@@ -22,8 +22,9 @@ namespace Doario.Data.Seeding
             SeedSourceTypes(modelBuilder);
             SeedSystemStatuses(modelBuilder);
             SeedMessageTypes(modelBuilder);
-            SeedSubscriptionPlans(modelBuilder);      // ← NEW
-            SeedSystemStatuses_PermanentFail(modelBuilder); // ← NEW
+            SeedSubscriptionPlans(modelBuilder);
+            SeedSystemStatuses_PermanentFail(modelBuilder);
+            SeedDocumentStatuses_Trashed(modelBuilder);  // Day 15
         }
 
         private static void SeedDocumentStatuses(ModelBuilder modelBuilder)
@@ -37,6 +38,14 @@ namespace Doario.Data.Seeding
                 new DocumentStatus { DocumentStatusId = 6, Name = "EmailReceived", SortOrder = 600, StartDate = Epoch, EndDate = Never },
                 new DocumentStatus { DocumentStatusId = 7, Name = "Spam", SortOrder = 700, StartDate = Epoch, EndDate = Never },
                 new DocumentStatus { DocumentStatusId = 8, Name = "Promotion", SortOrder = 800, StartDate = Epoch, EndDate = Never }
+            );
+        }
+
+        // Day 15 — Trashed added as separate method to avoid re-seeding the entire block
+        private static void SeedDocumentStatuses_Trashed(ModelBuilder modelBuilder)
+        {
+            modelBuilder.Entity<DocumentStatus>().HasData(
+                new DocumentStatus { DocumentStatusId = 9, Name = "Trashed", SortOrder = 900, StartDate = Epoch, EndDate = Never }
             );
         }
 
@@ -90,8 +99,6 @@ namespace Doario.Data.Seeding
             );
         }
 
-        // Day 10 — PermanentFail added as separate method to avoid
-        // re-seeding the entire SystemStatuses block
         private static void SeedSystemStatuses_PermanentFail(ModelBuilder modelBuilder)
         {
             modelBuilder.Entity<SystemStatus>().HasData(
@@ -115,7 +122,6 @@ namespace Doario.Data.Seeding
             );
         }
 
-        // ── NEW Day 12 ────────────────────────────────────────────────
         private static void SeedSubscriptionPlans(ModelBuilder modelBuilder)
         {
             modelBuilder.Entity<SubscriptionPlan>().HasData(
