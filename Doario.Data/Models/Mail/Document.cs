@@ -57,6 +57,14 @@ namespace Doario.Data.Models.Mail
         public string OriginalFileName { get; set; }
 
         /// <summary>
+        /// Source of this document — 10=Fax, 11=Email, 12=Scanner etc.
+        /// See SourceType lookup table.
+        /// </summary>
+        public int SourceTypeId { get; set; } = 12; // Default Scanner
+
+        public SourceType SourceType { get; set; }
+
+        /// <summary>
         /// Groups pages that were scanned together in one batch.
         /// All documents split from the same scan share the same BatchScanId.
         /// Null for documents uploaded individually.

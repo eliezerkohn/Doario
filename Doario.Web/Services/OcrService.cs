@@ -1,8 +1,11 @@
 ﻿using Azure;
 using Azure.AI.DocumentIntelligence;
+using Doario.Data;
+using Doario.Data.Models.SaaS;
+using Doario.Data.Repositories;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Microsoft.Graph;
-using Doario.Data.Repositories;
 
 namespace Doario.Web.Services;
 
@@ -12,16 +15,19 @@ public class OcrService
     private readonly DocumentIntelligenceClient _docIntelligence;
     private readonly GraphServiceClient _graph;
     private readonly ILogger<OcrService> _logger;
+    private readonly AiProcessingQueue _aiQueue;
 
     public OcrService(
         IServiceScopeFactory scopeFactory,
         IOptions<OcrOptions> ocrOptions,
         GraphServiceClient graph,
+        AiProcessingQueue aiQueue,
         ILogger<OcrService> logger)
     {
         _scopeFactory = scopeFactory;
         _graph = graph;
         _logger = logger;
+        _aiQueue = aiQueue;
         _docIntelligence = new DocumentIntelligenceClient(
             new Uri(ocrOptions.Value.Endpoint),
             new AzureKeyCredential(ocrOptions.Value.ApiKey));
@@ -29,6 +35,7 @@ public class OcrService
 
     // ── Full OCR — runs after document is confirmed and saved ─────────────────
     // Downloads from SharePoint, extracts all text, fires AI summary.
+    // On failure — sets document status to 5 (OcrFailed) so it can be retried.
 
     public void RunInBackground(Guid documentId)
     {
@@ -38,7 +45,6 @@ public class OcrService
             {
                 using var scope = _scopeFactory.CreateScope();
                 var documents = scope.ServiceProvider.GetRequiredService<IDocumentRepository>();
-                var aiSummaryService = scope.ServiceProvider.GetRequiredService<AiSummaryService>();
 
                 var doc = await documents.GetByIdAsync(documentId);
                 if (doc is null)
@@ -50,6 +56,7 @@ public class OcrService
                 if (string.IsNullOrEmpty(doc.SharePointUrl))
                 {
                     _logger.LogWarning("OcrService: Document {Id} has no SharePointUrl.", documentId);
+                    await documents.UpdateStatusAsync(documentId, 5); // OcrFailed
                     return;
                 }
 
@@ -57,6 +64,7 @@ public class OcrService
                 if (fileStream is null)
                 {
                     _logger.LogWarning("OcrService: Could not download file for Document {Id}.", documentId);
+                    await documents.UpdateStatusAsync(documentId, 5); // OcrFailed
                     return;
                 }
 
@@ -96,19 +104,92 @@ public class OcrService
                     "OcrService: OCR complete. Document {Id}, Characters {Count}",
                     documentId, extractedText.Length);
 
-                aiSummaryService.RunInBackground(documentId);
+                // Record billable usage for this document
+                await RecordBillingUsageAsync(scope, doc.TenantId, documentId);
+
+                // Use queue for rate-limit-safe parallel processing
+                _aiQueue.Enqueue(documentId);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "OcrService: OCR failed for Document {Id}.", documentId);
+
+                // Mark as OcrFailed (status 5) so background service can detect and retry
+                try
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var documents = scope.ServiceProvider.GetRequiredService<IDocumentRepository>();
+                    await documents.UpdateStatusAsync(documentId, 5);
+                }
+                catch (Exception statusEx)
+                {
+                    _logger.LogError(statusEx,
+                        "OcrService: Failed to set OcrFailed status for Document {Id}.", documentId);
+                }
             }
         });
     }
 
-    // ── Quick OCR on a raw base64 PNG — used for pre-split boundary detection ─
-    // Does NOT touch SharePoint or the DB.
-    // Returns extracted text, or empty string if the page appears blank or OCR fails.
-    // Called once per page in IngestController before AI splitting.
+    // ── Retry OCR for a document — resets status and reruns ──────────────────
+    // Called by background service when retrying stuck/failed OCR documents.
+
+    public void RetryOcr(Guid documentId)
+    {
+        Task.Run(async () =>
+        {
+            try
+            {
+                // Reset status to Unassigned before retrying
+                using var scope = _scopeFactory.CreateScope();
+                var documents = scope.ServiceProvider.GetRequiredService<IDocumentRepository>();
+                await documents.UpdateStatusAsync(documentId, 1);
+            }
+            catch { }
+        });
+
+        RunInBackground(documentId);
+    }
+
+    // ── Record one billable document usage event ──────────────────────────────
+
+    private async Task RecordBillingUsageAsync(IServiceScope scope, Guid tenantId, Guid documentId)
+    {
+        try
+        {
+            var db = scope.ServiceProvider.GetRequiredService<DoarioDataContext>();
+
+            var alreadyRecorded = await db.TenantBillingUsages
+                .AnyAsync(u => u.DocumentId == documentId);
+
+            if (alreadyRecorded)
+            {
+                _logger.LogDebug("OcrService: Billing usage already recorded for Document {Id}.", documentId);
+                return;
+            }
+
+            db.TenantBillingUsages.Add(new TenantBillingUsage
+            {
+                TenantBillingUsageId = Guid.NewGuid(),
+                TenantId = tenantId,
+                DocumentId = documentId,
+                RecordedAt = DateTime.UtcNow,
+                ReportedToStripe = false,
+                Quantity = 1
+            });
+
+            await db.SaveChangesAsync();
+
+            _logger.LogInformation(
+                "OcrService: Billing usage recorded for Document {Id}, Tenant {TenantId}.",
+                documentId, tenantId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "OcrService: Failed to record billing usage for Document {Id}.", documentId);
+        }
+    }
+
+    // ── Quick OCR on a raw base64 PNG ─────────────────────────────────────────
 
     public async Task<string> OcrPageAsync(string base64Image)
     {

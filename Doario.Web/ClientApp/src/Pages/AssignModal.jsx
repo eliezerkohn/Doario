@@ -5,7 +5,7 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 
-const AssignModal = ({ doc, staff, onClose, onAssigned, onReverted }) => {
+const AssignModal = ({ doc, staff, onClose, onAssigned, onReverted, suggestionId, isOverwrite }) => {
     const [selectedStaffId, setSelectedStaffId] = useState('');
     const [ccStaffId, setCcStaffId] = useState('');
     const [note, setNote] = useState('');
@@ -19,20 +19,29 @@ const AssignModal = ({ doc, staff, onClose, onAssigned, onReverted }) => {
         setSaving(true);
         setError('');
 
-        // Optimistic update BEFORE API call — poll guard is active immediately
-        onAssigned(doc.documentId);
-
         try {
-            await axios.post('/api/assignment/assign', {
-                documentId: doc.documentId,
-                staffId: selectedStaffId,
-                ccStaffId: ccStaffId || null,
-                note,
-            });
+            if (isOverwrite && suggestionId) {
+                // Overwrite AI suggestion — no optimistic update, reload after API completes
+                await axios.post(`/api/assignment/overwrite/${suggestionId}`, {
+                    documentId: doc.documentId,
+                    staffId: selectedStaffId,
+                    note,
+                });
+                onAssigned(doc.documentId);
+            } else {
+                // Optimistic update BEFORE API call — poll guard is active immediately
+                onAssigned(doc.documentId);
+                await axios.post('/api/assignment/assign', {
+                    documentId: doc.documentId,
+                    staffId: selectedStaffId,
+                    ccStaffId: ccStaffId || null,
+                    note,
+                });
+            }
             onClose();
         } catch (e) {
-            // Revert optimistic update on failure
-            onReverted(doc.documentId, doc.statusId);
+            // Only revert optimistic update for non-overwrite
+            if (!isOverwrite) onReverted(doc.documentId, doc.statusId);
             setError(e.response?.data?.error ?? 'Assignment failed.');
             setSaving(false);
         }
@@ -45,7 +54,7 @@ const AssignModal = ({ doc, staff, onClose, onAssigned, onReverted }) => {
 
                     <div className="modal-header">
                         <h5 className="modal-title">
-                            {isReassign ? 'Reassign Document' : 'Assign Document'}
+                            {isOverwrite ? 'Reassign & Correct AI' : isReassign ? 'Reassign Document' : 'Assign Document'}
                         </h5>
                         <button type="button" className="btn-close" onClick={onClose} />
                     </div>
@@ -110,7 +119,7 @@ const AssignModal = ({ doc, staff, onClose, onAssigned, onReverted }) => {
                     <div className="modal-footer">
                         <button className="btn btn-outline-secondary" onClick={onClose}>Cancel</button>
                         <button className="btn btn-dark" onClick={handleSubmit} disabled={saving}>
-                            {saving ? 'Saving…' : isReassign ? 'Reassign' : 'Assign'}
+                            {saving ? 'Saving…' : isOverwrite ? 'Reassign & Correct AI' : isReassign ? 'Reassign' : 'Assign'}
                         </button>
                     </div>
 

@@ -10,6 +10,9 @@ export default function SubscriptionSettings() {
     const [subscription, setSubscription] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
+    const [switching, setSwitching] = useState(null);
+    const [switchError, setSwitchError] = useState('');
+    const [switchSuccess, setSwitchSuccess] = useState('');
 
     useEffect(() => { load(); }, []);
 
@@ -30,7 +33,22 @@ export default function SubscriptionSettings() {
         }
     };
 
-    // Usage percentage — cap at 100 so bar never overflows
+    const switchPlan = async (planId, planName) => {
+        if (!window.confirm(`Switch to the ${planName} plan?`)) return;
+        setSwitching(planId);
+        setSwitchError('');
+        setSwitchSuccess('');
+        try {
+            await axios.post('/api/settings/switch-plan', { subscriptionPlanId: planId });
+            setSwitchSuccess(`Switched to ${planName} successfully.`);
+            await load();
+        } catch {
+            setSwitchError('Failed to switch plan. Please try again.');
+        } finally {
+            setSwitching(null);
+        }
+    };
+
     const usagePct = subscription
         ? Math.min((subscription.documentsUsed / subscription.includedDocuments) * 100, 100)
         : 0;
@@ -91,14 +109,19 @@ export default function SubscriptionSettings() {
 
                     <Shared.Divider />
 
-                    {/* Billing coming soon */}
+                    {/* Link to billing dashboard */}
                     <div style={billingNote}>
-                        <div style={billingIcon}>💳</div>
+                        <div style={billingIcon}>📊</div>
                         <div>
-                            <div style={billingTitle}>Billing management coming soon</div>
+                            <div style={billingTitle}>Billing & Usage</div>
                             <div style={billingSub}>
-                                You will be able to manage your subscription,
-                                view invoices, and update payment details here on Day 18.
+                                View your monthly usage, estimated charges, and manage promos in the{' '}
+                                <span
+                                    style={{ color: '#0d9488', fontWeight: 600, cursor: 'pointer' }}
+                                    onClick={() => window.location.href = '/settings/billing'}
+                                >
+                                    Billing tab
+                                </span>.
                             </div>
                         </div>
                     </div>
@@ -116,13 +139,21 @@ export default function SubscriptionSettings() {
                 <div style={S.card}>
                     <div style={cardTitle}>Available Plans</div>
                     <div style={{ ...cardSub, marginBottom: 20 }}>
-                        Plan changes available when billing is enabled.
+                        Switch plans at any time. Changes take effect immediately.
                     </div>
+
+                    {switchError && (
+                        <div style={{ ...S.msg, ...S.msgError, marginBottom: 12 }}>❌ {switchError}</div>
+                    )}
+                    {switchSuccess && (
+                        <div style={{ ...S.msg, ...S.msgSuccess, marginBottom: 12 }}>✅ {switchSuccess}</div>
+                    )}
 
                     <div style={plansRow}>
                         {plans.map(plan => {
                             const isCurrent = subscription?.planName === plan.name;
                             const color = isCurrent ? '#0d9488' : '#6b8499';
+                            const isSwitching = switching === plan.subscriptionPlanId;
                             return (
                                 <div
                                     key={plan.subscriptionPlanId}
@@ -160,14 +191,16 @@ export default function SubscriptionSettings() {
                                             ...S.btnSecondary,
                                             width: '100%',
                                             marginTop: 16,
-                                            opacity: 0.4,
-                                            cursor: 'not-allowed',
                                             fontSize: 12,
                                             padding: '7px 0',
+                                            opacity: isCurrent || switching ? 0.5 : 1,
+                                            cursor: isCurrent || switching ? 'not-allowed' : 'pointer',
+                                            background: isCurrent ? 'transparent' : undefined,
                                         }}
-                                        disabled
+                                        disabled={isCurrent || !!switching}
+                                        onClick={() => !isCurrent && !switching && switchPlan(plan.subscriptionPlanId, plan.name)}
                                     >
-                                        {isCurrent ? 'Current Plan' : 'Switch Plan'}
+                                        {isCurrent ? 'Current Plan' : isSwitching ? 'Switching...' : 'Switch Plan'}
                                     </button>
                                 </div>
                             );

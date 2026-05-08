@@ -44,6 +44,15 @@ public class TenantSubscription
     [Required, MaxLength(100)]
     public string StripeSubscriptionId { get; set; }
 
+    /// <summary>
+    /// The Stripe Subscription Item ID for the metered usage line item.
+    /// Required to report usage records via Stripe's metered billing API.
+    /// e.g. si_ABC123XYZ
+    /// Set when the metered subscription item is created in Stripe.
+    /// </summary>
+    [MaxLength(100)]
+    public string StripeSubscriptionItemId { get; set; }
+
     public DateTime StartDate { get; set; } = DateTime.UtcNow;
     public DateTime EndDate { get; set; } = DateTime.MaxValue;
 }

@@ -1,9 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace Doario.Data.Models.SaaS
 {
@@ -90,8 +87,19 @@ namespace Doario.Data.Models.SaaS
         [MaxLength(50)]
         public string ApiKeyPrefix { get; set; }
 
+        /// <summary>
+        /// Stripe Customer ID for this tenant.
+        /// Created via Stripe API at tenant onboarding or first billing setup.
+        /// e.g. cus_ABC123XYZ
+        /// Null until the tenant is set up for billing.
+        /// </summary>
+        [MaxLength(100)]
+        public string StripeCustomerId { get; set; }
+
         // Navigation
         public ICollection<TenantSubscription> Subscriptions { get; set; } = new List<TenantSubscription>();
         public ICollection<TenantConnection> Connections { get; set; } = new List<TenantConnection>();
+        public ICollection<TenantBillingUsage> BillingUsages { get; set; } = new List<TenantBillingUsage>();
+        public ICollection<TenantPromo> Promos { get; set; } = new List<TenantPromo>();
     }
 }

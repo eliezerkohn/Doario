@@ -5,4 +5,5 @@ namespace Doario.Data.Repositories;
 public interface ISubscriptionRepository
 {
     Task<TenantSubscription> GetActiveForTenantAsync(Guid tenantId);
+    Task<TenantSubscription> SwitchPlanAsync(Guid tenantId, SubscriptionPlan newPlan);
 }

@@ -12,6 +12,11 @@ public class TrayApp : ApplicationContext
     private NotifyIcon _trayIcon;
     private SettingsWindow _settingsWindow;
 
+    // Cached scanner list — only refreshed on demand, not on every menu open
+    private List<string> _cachedScanners = new();
+    private DateTime _scannerCacheTime = DateTime.MinValue;
+    private static readonly TimeSpan ScannerCacheDuration = TimeSpan.FromMinutes(5);
+
     public TrayApp(
         SettingsService settingsService,
         ScannerService scannerService,
@@ -32,7 +37,6 @@ public class TrayApp : ApplicationContext
     {
         var contextMenu = new ContextMenuStrip();
 
-        // Header — not clickable, just shows app name
         var header = new ToolStripLabel("DoarioScan")
         {
             Font = new Font("Segoe UI", 9f, FontStyle.Bold),
@@ -41,7 +45,6 @@ public class TrayApp : ApplicationContext
         contextMenu.Items.Add(header);
         contextMenu.Items.Add(new ToolStripSeparator());
 
-        // Status item — shows if Bridge is ready
         var statusItem = new ToolStripLabel(GetStatusText())
         {
             ForeColor = Color.FromArgb(100, 120, 140),
@@ -50,35 +53,39 @@ public class TrayApp : ApplicationContext
         contextMenu.Items.Add(statusItem);
         contextMenu.Items.Add(new ToolStripSeparator());
 
-        // Settings
         var settingsItem = new ToolStripMenuItem("⚙️  Settings");
         settingsItem.Click += (s, e) => OpenSettings();
         contextMenu.Items.Add(settingsItem);
 
-        // Test connection
         var testItem = new ToolStripMenuItem("🔗  Test Connection");
         testItem.Click += async (s, e) => await TestConnectionAsync(statusItem);
         contextMenu.Items.Add(testItem);
 
-        // View logs
+        // Refresh scanner list manually — not on every menu open
+        var refreshItem = new ToolStripMenuItem("🔄  Refresh Scanners");
+        refreshItem.Click += (s, e) =>
+        {
+            _scannerCacheTime = DateTime.MinValue; // force refresh
+            statusItem.Text = GetStatusText();
+        };
+        contextMenu.Items.Add(refreshItem);
+
         var logsItem = new ToolStripMenuItem("📋  View Logs");
         logsItem.Click += (s, e) => OpenLogs();
         contextMenu.Items.Add(logsItem);
 
         contextMenu.Items.Add(new ToolStripSeparator());
 
-        // Exit
         var exitItem = new ToolStripMenuItem("Exit");
         exitItem.Click += (s, e) => ExitApp();
         contextMenu.Items.Add(exitItem);
 
-        // Refresh status when menu opens
+        // Only update status text on menu open — do NOT re-scan for scanners
         contextMenu.Opening += (s, e) =>
         {
             statusItem.Text = GetStatusText();
         };
 
-        // Build tray icon
         _trayIcon = new NotifyIcon
         {
             Text = "DoarioScan Bridge",
@@ -87,7 +94,6 @@ public class TrayApp : ApplicationContext
             Visible = true,
         };
 
-        // Double click opens settings
         _trayIcon.DoubleClick += (s, e) => OpenSettings();
     }
 
@@ -116,7 +122,6 @@ public class TrayApp : ApplicationContext
         var settings = _settingsService.Load();
         if (!_settingsService.IsConfigured(settings))
         {
-            // Show settings window on first run so admin can configure
             OpenSettings();
             _trayIcon.ShowBalloonTip(
                 3000,
@@ -145,7 +150,12 @@ public class TrayApp : ApplicationContext
         }
 
         _settingsWindow = new SettingsWindow(_settingsService, _scannerService);
-        _settingsWindow.FormClosed += (s, e) => _settingsWindow = null;
+        _settingsWindow.FormClosed += (s, e) =>
+        {
+            _settingsWindow = null;
+            // Refresh scanner cache when settings window closes
+            _scannerCacheTime = DateTime.MinValue;
+        };
         _settingsWindow.Show();
     }
 
@@ -230,14 +240,32 @@ public class TrayApp : ApplicationContext
 
     // ── Helpers ───────────────────────────────────────────────────
 
+    /// <summary>
+    /// Returns status text using cached scanner list.
+    /// Only re-scans for scanners if cache is older than 5 minutes
+    /// or has been manually invalidated.
+    /// </summary>
     private string GetStatusText()
     {
         var settings = _settingsService.Load();
         if (!_settingsService.IsConfigured(settings))
             return "⚠️  Not configured";
 
-        var scanners = _scannerService.GetAvailableScanners();
-        var scannerReady = scanners.Contains(settings.SelectedScanner);
+        // Refresh scanner cache if stale
+        if (DateTime.UtcNow - _scannerCacheTime > ScannerCacheDuration)
+        {
+            try
+            {
+                _cachedScanners = _scannerService.GetAvailableScanners();
+                _scannerCacheTime = DateTime.UtcNow;
+            }
+            catch
+            {
+                // If scanner enumeration fails, keep old cache
+            }
+        }
+
+        var scannerReady = _cachedScanners.Contains(settings.SelectedScanner);
 
         return scannerReady
             ? $"✅  Ready — {settings.SelectedScanner}"
@@ -246,8 +274,6 @@ public class TrayApp : ApplicationContext
 
     private Icon CreateTrayIcon()
     {
-        // Create a simple tray icon programmatically
-        // Replace with a real .ico file in production
         var bmp = new Bitmap(16, 16);
         using var g = Graphics.FromImage(bmp);
         g.Clear(Color.FromArgb(13, 148, 136));

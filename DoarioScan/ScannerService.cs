@@ -13,12 +13,14 @@ public class ScannerService
     private readonly SettingsService _settingsService;
 
     // A page is blank if this fraction of sampled pixels are "light"
-    // 0.98 = 98% of sampled pixels must be near-white
-    private const double BlankThreshold = 0.98;
+    // 0.995 = 99.5% of sampled pixels must be near-white
+    // Raised from 0.98 — pages with faint content were being incorrectly skipped
+    private const double BlankThreshold = 0.995;
 
     // Pixel brightness threshold — 0-255, anything above this is "white"
-    // 240 catches off-white scanner backgrounds
-    private const int WhiteLevel = 240;
+    // Lowered from 240 to 200 — faint text/content at 210-235 brightness
+    // was being counted as white, causing near-blank pages to be skipped
+    private const int WhiteLevel = 200;
 
     // Sample every Nth pixel for performance — no need to check every pixel
     private const int SampleStep = 10;
@@ -44,7 +46,6 @@ public class ScannerService
         catch { }
         return scanners;
     }
-
     public async Task<ScanResponse> ScanAsync(ScanRequest request)
     {
         var response = new ScanResponse();
@@ -215,6 +216,11 @@ public class ScannerService
 
             response.Success = true;
             response.Pages = pages;
+        }
+        catch (AccessViolationException)
+        {
+            response.Success = false;
+            response.Error = "Scanner driver crashed. Please restart DoarioScan and try again.";
         }
         catch (Exception ex)
         {

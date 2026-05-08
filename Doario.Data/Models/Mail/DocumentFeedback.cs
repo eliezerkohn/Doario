@@ -31,6 +31,12 @@ namespace Doario.Data.Models.Mail
         [MaxLength(500)]
         public string DocumentSnippet { get; set; }
 
+        /// <summary>
+        /// 1 = ClassificationCorrection (AI said spam, admin said mail)
+        /// 2 = AssignmentCorrection (AI suggested John, admin picked Jane)
+        /// </summary>
+        public int FeedbackTypeId { get; set; } = 1;
+
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     }
 }

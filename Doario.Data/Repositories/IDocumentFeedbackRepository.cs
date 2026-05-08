@@ -18,4 +18,10 @@ public interface IDocumentFeedbackRepository
     /// Used to prioritise corrections relevant to the current document's sender.
     /// </summary>
     Task<List<DocumentFeedback>> GetRelevantForSenderAsync(Guid tenantId, string ocrText);
+
+    /// <summary>
+    /// Returns assignment corrections for this tenant.
+    /// Used to teach AI who to assign documents to based on past corrections.
+    /// </summary>
+    Task<List<DocumentFeedback>> GetAssignmentCorrectionsAsync(Guid tenantId, string ocrText);
 }

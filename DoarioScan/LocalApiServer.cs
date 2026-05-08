@@ -13,6 +13,12 @@ public class LocalApiServer
     private CancellationTokenSource _cts;
     private Task _serverTask;
 
+    // Scanner cache — avoids calling TWAIN on every request
+    private List<string> _cachedScanners = new();
+    private DateTime _cacheTime = DateTime.MinValue;
+    private static readonly TimeSpan CacheDuration = TimeSpan.FromSeconds(30);
+    private readonly object _cacheLock = new();
+
     public LocalApiServer(ScannerService scannerService, SettingsService settingsService)
     {
         _scannerService = scannerService;
@@ -92,11 +98,41 @@ public class LocalApiServer
         }
     }
 
+    // ── Scanner cache helper ──────────────────────────────────────────────────
+
+    /// <summary>
+    /// Returns cached scanner list.
+    /// Forces a fresh TWAIN scan if cache is stale or refresh=true is passed.
+    /// </summary>
+    private List<string> GetScanners(bool forceRefresh = false)
+    {
+        lock (_cacheLock)
+        {
+            if (forceRefresh || DateTime.UtcNow - _cacheTime > CacheDuration)
+            {
+                try
+                {
+                    _cachedScanners = _scannerService.GetAvailableScanners();
+                    _cacheTime = DateTime.UtcNow;
+                }
+                catch
+                {
+                    // If TWAIN fails keep old cache
+                }
+            }
+            return _cachedScanners;
+        }
+    }
+
+    // ── Handlers ──────────────────────────────────────────────────────────────
+
     private async Task HandleHealth(HttpListenerRequest req, HttpListenerResponse res)
     {
         var settings = _settingsService.Load();
         var isConfigured = _settingsService.IsConfigured(settings);
-        var scanners = _scannerService.GetAvailableScanners();
+
+        // Health check uses cache — no TWAIN call unless stale
+        var scanners = GetScanners();
         var scannerReady = scanners.Contains(settings.SelectedScanner);
 
         await WriteJson(res, 200, new
@@ -116,7 +152,11 @@ public class LocalApiServer
             await WriteJson(res, 405, new { error = "Method not allowed" });
             return;
         }
-        var scanners = _scannerService.GetAvailableScanners();
+
+        // ?refresh=true forces a fresh TWAIN scan immediately
+        var forceRefresh = req.QueryString["refresh"] == "true";
+        var scanners = GetScanners(forceRefresh);
+
         await WriteJson(res, 200, new { scanners });
     }
 
@@ -146,11 +186,6 @@ public class LocalApiServer
         await WriteJson(res, statusCode, response);
     }
 
-    /// <summary>
-    /// POST /upload
-    /// Portal sends all scanned pages.
-    /// Bridge forwards to scan-batch which returns AI split preview — no upload yet.
-    /// </summary>
     private async Task HandleUpload(HttpListenerRequest req, HttpListenerResponse res)
     {
         if (req.HttpMethod != "POST")
@@ -161,11 +196,6 @@ public class LocalApiServer
         await ForwardToBackend(req, res, "api/ingest/scan-batch");
     }
 
-    /// <summary>
-    /// POST /confirm
-    /// Portal sends confirmed pages for one document.
-    /// Bridge forwards to scan-confirm which builds PDF, uploads to SharePoint, creates DB record.
-    /// </summary>
     private async Task HandleConfirm(HttpListenerRequest req, HttpListenerResponse res)
     {
         if (req.HttpMethod != "POST")
@@ -176,12 +206,6 @@ public class LocalApiServer
         await ForwardToBackend(req, res, "api/ingest/scan-confirm");
     }
 
-    /// <summary>
-    /// POST /rescan
-    /// Portal sends new pages for a document being rescanned.
-    /// Bridge forwards to scan-replace which cleans up old file if needed
-    /// and returns new pages to portal for re-review.
-    /// </summary>
     private async Task HandleRescan(HttpListenerRequest req, HttpListenerResponse res)
     {
         if (req.HttpMethod != "POST")
@@ -192,9 +216,6 @@ public class LocalApiServer
         await ForwardToBackend(req, res, "api/ingest/scan-replace");
     }
 
-    /// <summary>
-    /// Shared helper — reads body, attaches API key, forwards to backend endpoint.
-    /// </summary>
     private async Task ForwardToBackend(
         HttpListenerRequest req,
         HttpListenerResponse res,

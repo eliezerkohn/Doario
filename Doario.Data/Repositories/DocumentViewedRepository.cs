@@ -11,7 +11,6 @@ public class DocumentViewedRepository : IDocumentViewedRepository
 
     public async Task MarkViewedAsync(Guid documentId, Guid tenantId, Guid viewedByStaffId)
     {
-        // Only insert if not already viewed — one row per document per tenant
         var exists = await _db.DocumentVieweds
             .AnyAsync(v => v.DocumentId == documentId && v.TenantId == tenantId);
 
@@ -41,10 +40,27 @@ public class DocumentViewedRepository : IDocumentViewedRepository
         }
     }
 
+    /// <summary>Returns ALL viewed document IDs for a tenant. Avoid for large tenants.</summary>
     public async Task<HashSet<Guid>> GetViewedDocumentIdsAsync(Guid tenantId)
         => (await _db.DocumentVieweds
             .Where(v => v.TenantId == tenantId)
             .Select(v => v.DocumentId)
             .ToListAsync())
             .ToHashSet();
+
+    /// <summary>
+    /// Returns viewed document IDs scoped to a specific page of documents.
+    /// Only queries the IDs we actually need — much faster than loading all.
+    /// </summary>
+    public async Task<HashSet<Guid>> GetViewedDocumentIdsAsync(Guid tenantId, IEnumerable<Guid> documentIds)
+    {
+        var ids = documentIds.ToList();
+        if (!ids.Any()) return new HashSet<Guid>();
+
+        return (await _db.DocumentVieweds
+            .Where(v => v.TenantId == tenantId && ids.Contains(v.DocumentId))
+            .Select(v => v.DocumentId)
+            .ToListAsync())
+            .ToHashSet();
+    }
 }

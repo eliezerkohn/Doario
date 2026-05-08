@@ -25,6 +25,7 @@ namespace Doario.Data.Seeding
             SeedSubscriptionPlans(modelBuilder);
             SeedSystemStatuses_PermanentFail(modelBuilder);
             SeedDocumentStatuses_Trashed(modelBuilder);  // Day 15
+            SeedSuggestionStatuses(modelBuilder);          // Day 17
         }
 
         private static void SeedDocumentStatuses(ModelBuilder modelBuilder)
@@ -170,6 +171,16 @@ namespace Doario.Data.Seeding
                     StartDate = Epoch,
                     EndDate = Never,
                 }
+            );
+        }
+
+        private static void SeedSuggestionStatuses(ModelBuilder modelBuilder)
+        {
+            modelBuilder.Entity<SuggestionStatus>().HasData(
+                new SuggestionStatus { SuggestionStatusId = 1, Name = "Pending", SortOrder = 100 },
+                new SuggestionStatus { SuggestionStatusId = 2, Name = "Approved", SortOrder = 200 },
+                new SuggestionStatus { SuggestionStatusId = 3, Name = "Overwritten", SortOrder = 300 },
+                new SuggestionStatus { SuggestionStatusId = 4, Name = "AutoAssigned", SortOrder = 400 }
             );
         }
     }

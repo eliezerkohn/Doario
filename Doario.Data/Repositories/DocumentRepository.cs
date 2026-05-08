@@ -34,6 +34,16 @@ public class DocumentRepository : IDocumentRepository
             .Take(pageSize)
             .ToListAsync();
 
+    public async Task<List<Document>> GetQueueByStatusAsync(Guid tenantId, int[] statusIds, int page, int pageSize)
+        => await _db.Documents
+            .Where(d => d.TenantId == tenantId && statusIds.Contains(d.DocumentStatusId))
+            .Include(d => d.DocumentStatus)
+            .Include(d => d.Sender)
+            .OrderByDescending(d => d.UploadedAt)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync();
+
     public async Task<int> GetMonthlyCountAsync(Guid tenantId, int year, int month)
         => await _db.Documents
             .CountAsync(d => d.TenantId == tenantId
@@ -42,26 +52,23 @@ public class DocumentRepository : IDocumentRepository
 
     public async Task UpdateStatusAsync(Guid documentId, int statusId)
     {
-        var doc = await _db.Documents.FindAsync(documentId);
-        if (doc is null) return;
-        doc.DocumentStatusId = statusId;
-        await _db.SaveChangesAsync();
+        await _db.Documents
+            .Where(d => d.DocumentId == documentId)
+            .ExecuteUpdateAsync(s => s.SetProperty(d => d.DocumentStatusId, statusId));
     }
 
     public async Task UpdateOcrTextAsync(Guid documentId, string ocrText)
     {
-        var doc = await _db.Documents.FindAsync(documentId);
-        if (doc is null) return;
-        doc.OcrText = ocrText;
-        await _db.SaveChangesAsync();
+        await _db.Documents
+            .Where(d => d.DocumentId == documentId)
+            .ExecuteUpdateAsync(s => s.SetProperty(d => d.OcrText, ocrText));
     }
 
     public async Task UpdateAiSummaryAsync(Guid documentId, string aiSummary)
     {
-        var doc = await _db.Documents.FindAsync(documentId);
-        if (doc is null) return;
-        doc.AiSummary = aiSummary;
-        await _db.SaveChangesAsync();
+        await _db.Documents
+            .Where(d => d.DocumentId == documentId)
+            .ExecuteUpdateAsync(s => s.SetProperty(d => d.AiSummary, aiSummary));
     }
 
     public async Task<Document> CreateAsync(Document document)
@@ -75,16 +82,44 @@ public class DocumentRepository : IDocumentRepository
     {
         var doc = await _db.Documents.FindAsync(documentId);
         if (doc is null) return;
+
+        await _db.DocumentVieweds
+            .Where(x => x.DocumentId == documentId)
+            .ExecuteDeleteAsync();
+
+        await _db.DocumentAiSuggestions
+            .Where(x => x.DocumentId == documentId)
+            .ExecuteDeleteAsync();
+
+        await _db.DocumentDeliveries
+            .Where(x => x.DocumentAssignment.DocumentId == documentId)
+            .ExecuteDeleteAsync();
+
+        await _db.DocumentAssignments
+            .Where(x => x.DocumentId == documentId)
+            .ExecuteDeleteAsync();
+
+        await _db.DocumentChecks
+            .Where(x => x.DocumentId == documentId)
+            .ExecuteDeleteAsync();
+
+        await _db.DocumentFeedbacks
+            .Where(x => x.DocumentId == documentId)
+            .ExecuteDeleteAsync();
+
+        await _db.DocumentMessages
+            .Where(x => x.DocumentId == documentId)
+            .ExecuteDeleteAsync();
+
         _db.Documents.Remove(doc);
         await _db.SaveChangesAsync();
     }
 
     public async Task UpdateSenderIdAsync(Guid documentId, Guid senderId)
     {
-        var doc = await _db.Documents.FindAsync(documentId);
-        if (doc is null) return;
-        doc.SenderId = senderId;
-        await _db.SaveChangesAsync();
+        await _db.Documents
+            .Where(d => d.DocumentId == documentId)
+            .ExecuteUpdateAsync(s => s.SetProperty(d => d.SenderId, senderId));
     }
 
     public async Task<List<Document>> GetBySenderAsync(Guid tenantId, string query)
@@ -101,11 +136,6 @@ public class DocumentRepository : IDocumentRepository
             .ToListAsync();
     }
 
-    /// <summary>
-    /// Returns one entry per unique sender seen at this tenant.
-    /// Queries the Sender table directly — accurate and deduplicated.
-    /// Only includes senders that have at least one document.
-    /// </summary>
     public async Task<List<SenderSummary>> GetDistinctSendersAsync(Guid tenantId)
         => await _db.Senders
             .Where(s => s.TenantId == tenantId &&
@@ -121,6 +151,21 @@ public class DocumentRepository : IDocumentRepository
             .Where(s => s.DocumentCount > 0)
             .OrderBy(s => s.DisplayName == string.Empty ? s.Email : s.DisplayName)
             .ToListAsync();
+
+    public async Task<List<Document>> GetStuckDocumentsAsync(Guid tenantId)
+        => await _db.Documents
+            .Where(d => d.TenantId == tenantId
+                     && d.OcrText != null && d.OcrText != ""
+                     && (d.AiSummary == null || d.AiSummary == ""))
+            .ToListAsync();
+
+    /// <summary>
+    /// Returns true if a document with this filename already exists for the tenant.
+    /// Prevents duplicate processing when concurrent fetchers run.
+    /// </summary>
+    public async Task<bool> ExistsByFileNameAsync(Guid tenantId, string fileName)
+        => await _db.Documents
+            .AnyAsync(d => d.TenantId == tenantId && d.OriginalFileName == fileName);
 
     public async Task SaveAsync()
         => await _db.SaveChangesAsync();

@@ -16,7 +16,7 @@ const stripMarkup = (html) => {
     return html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
 };
 
-const ChecksSearch = ({ selected, onSelect }) => {
+const ChecksSearch = ({ selected, onSelect, hideHeader }) => {
     const [input, setInput] = useState('');
     const [results, setResults] = useState([]);
     const [allChecks, setAllChecks] = useState([]);
@@ -58,9 +58,9 @@ const ChecksSearch = ({ selected, onSelect }) => {
     return (
         <div style={styles.panel}>
 
-            <div style={styles.header}>
+            {!hideHeader && <div style={styles.header}>
                 <h2 style={styles.title}>Search Checks</h2>
-            </div>
+            </div>}
 
             <div style={styles.searchSection}>
                 <div style={styles.inputRow}>

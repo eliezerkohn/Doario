@@ -23,7 +23,7 @@ const stripMarkup = (html) => {
 
 const TABS = ['All', 'Active', 'Completed'];
 
-const MailSearch = ({ staff, selected, onSelect }) => {
+const MailSearch = ({ staff, selected, onSelect, hideHeader }) => {
     const [email, setEmail] = useState('');
     const [query, setQuery] = useState('');
     const [results, setResults] = useState([]);
@@ -84,9 +84,9 @@ const MailSearch = ({ staff, selected, onSelect }) => {
     return (
         <div style={styles.panel}>
 
-            <div style={styles.header}>
+            {!hideHeader && <div style={styles.header}>
                 <h2 style={styles.title}>Search by Staff</h2>
-            </div>
+            </div>}
 
             <div style={styles.searchSection}>
                 <div style={styles.inputWrap}>

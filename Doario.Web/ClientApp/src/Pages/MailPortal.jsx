@@ -4,13 +4,22 @@ import React, { useEffect, useState, useRef, useCallback } from 'react';
 import axios from 'axios';
 import MailSidebar from './MailSidebar';
 import MailList from './MailList';
-import MailSearch from './MailSearch';
-import SenderSearch from './SenderSearch';
-import ChecksSearch from './ChecksSearch';
+import PendingApprovals from './PendingApprovals';
 import MailReader from './MailReader';
 import AssignModal from './AssignModal';
 
-const POLL_MS = 5000;
+const PAGE_SIZE = 50;
+const POLL_MS = 30000;
+
+const FOLDER_STATUS_MAP = {
+    'Inbox': '1,2',
+    'Unassigned': '1',
+    'Assigned': '2',
+    'Actioned': '4',
+    'Spam': '7',
+    'Promotions': '8',
+    'Trash': '9',
+};
 
 const MailPortal = () => {
     const [docs, setDocs] = useState([]);
@@ -18,93 +27,162 @@ const MailPortal = () => {
     const [selected, setSelected] = useState(null);
     const [folder, setFolder] = useState('Inbox');
     const [loading, setLoading] = useState(true);
+    const [loadingMore, setLoadingMore] = useState(false);
+    const [hasMore, setHasMore] = useState(true);
+    const [page, setPage] = useState(1);
+    const [counts, setCounts] = useState({});
+    const [pendingCount, setPendingCount] = useState(0);
     const [assigningDoc, setAssigningDoc] = useState(null);
+
     const localAssigned = useRef({});
     const pollRef = useRef(null);
+    const prevFolderRef = useRef(null);
 
-    // ── Fetch ──────────────────────────────────────────────────────────────────
+    // ── Load counts ───────────────────────────────────────────────────────────
 
-    const loadDocs = useCallback(async () => {
+    const loadCounts = useCallback(async () => {
         try {
-            const r = await axios.get('/api/admin/queue?page=1&pageSize=500');
-            setDocs(r.data);
-        } catch { /* silent */ }
-    }, []);
-
-    const silentRefresh = useCallback(async () => {
-        try {
-            const r = await axios.get('/api/admin/queue?page=1&pageSize=500');
-            const now = Date.now();
-            const map = new Map(r.data.map(d => [d.documentId, d]));
-
-            setDocs(prev => prev.map(d => {
-                const server = map.get(d.documentId);
-                if (!server) return d;
-                const assignedAt = localAssigned.current[d.documentId];
-                const recentlyAssigned = assignedAt && (now - assignedAt < 15000);
-                if (recentlyAssigned && server.statusId !== 2)
-                    return { ...server, statusId: 2, statusName: 'Assigned', isViewed: d.isViewed };
-                if (server.statusId === 2)
-                    delete localAssigned.current[d.documentId];
-                return server;
-            }));
-
-            // Update reading pane
-            setSelected(prev => {
-                if (!prev) return prev;
-                const updated = map.get(prev.documentId);
-                return updated ?? prev;
-            });
-        } catch { /* silent */ }
+            const [countsRes, pendingRes] = await Promise.all([
+                axios.get('/api/admin/counts'),
+                axios.get('/api/assignment/pending-count'),
+            ]);
+            setCounts(countsRes.data);
+            setPendingCount(pendingRes.data.count);
+        } catch { }
     }, []);
 
     const loadStaff = useCallback(async () => {
         try {
             const r = await axios.get('/api/assignment/staff');
             setStaff(r.data);
-        } catch { /* silent */ }
+        } catch { }
     }, []);
 
+    // ── Load docs for folder ──────────────────────────────────────────────────
+
+    const loadDocs = useCallback(async (currentFolder, pageNum = 1, append = false) => {
+        let data = [];
+
+        if (currentFolder === 'Checks') {
+            // Checks uses dedicated endpoint — returns only actual checks
+            const r = await axios.get('/api/admin/checks');
+            data = r.data;
+            setHasMore(false);
+        } else {
+            const statusIds = FOLDER_STATUS_MAP[currentFolder];
+            let url = `/api/admin/queue?page=${pageNum}&pageSize=${PAGE_SIZE}`;
+            if (statusIds) url += `&statusIds=${statusIds}`;
+            const r = await axios.get(url);
+            data = r.data;
+            setHasMore(data.length === PAGE_SIZE);
+        }
+
+        if (append) {
+            setDocs(prev => [...prev, ...data]);
+        } else {
+            setDocs(data);
+        }
+    }, []);
+
+    // ── Silent poll ───────────────────────────────────────────────────────────
+
+    const silentRefresh = useCallback(async (currentFolder) => {
+        if (currentFolder === 'Checks') return; // checks don't need polling
+
+        const statusIds = FOLDER_STATUS_MAP[currentFolder];
+        let url = `/api/admin/queue?page=1&pageSize=${PAGE_SIZE}`;
+        if (statusIds) url += `&statusIds=${statusIds}`;
+
+        try {
+            const r = await axios.get(url);
+            const now = Date.now();
+
+            setDocs(prev => {
+                const serverMap = new Map(r.data.map(d => [d.documentId, d]));
+                const existingIds = new Set(prev.map(d => d.documentId));
+                const newDocs = r.data.filter(d => !existingIds.has(d.documentId));
+                const updated = prev.map(d => {
+                    const server = serverMap.get(d.documentId);
+                    if (!server) return d;
+                    const assignedAt = localAssigned.current[d.documentId];
+                    const recentlyAssigned = assignedAt && (now - assignedAt < 15000);
+                    if (recentlyAssigned && server.statusId !== 2)
+                        return { ...server, statusId: 2, statusName: 'Assigned', isViewed: d.isViewed };
+                    if (server.statusId === 2)
+                        delete localAssigned.current[d.documentId];
+                    return server;
+                });
+                return newDocs.length > 0 ? [...newDocs, ...updated] : updated;
+            });
+
+            setSelected(prev => {
+                if (!prev) return prev;
+                return r.data.find(d => d.documentId === prev.documentId) ?? prev;
+            });
+        } catch { }
+
+        loadCounts();
+    }, [loadCounts]);
+
+    // ── Initial load ──────────────────────────────────────────────────────────
+
     useEffect(() => {
-        Promise.all([loadDocs(), loadStaff()]).finally(() => setLoading(false));
-        pollRef.current = setInterval(silentRefresh, POLL_MS);
+        const init = async () => {
+            setLoading(true);
+            await Promise.all([
+                loadDocs('Inbox', 1),
+                loadStaff(),
+                loadCounts(),
+            ]);
+            setLoading(false);
+            prevFolderRef.current = 'Inbox';
+        };
+
+        init();
+
+        pollRef.current = setInterval(() => {
+            const f = prevFolderRef.current;
+            if (f && f !== 'Pending Approvals') silentRefresh(f);
+        }, POLL_MS);
+
         return () => clearInterval(pollRef.current);
-    }, [loadDocs, loadStaff, silentRefresh]);
+    }, []); // eslint-disable-line
 
-    // ── Folder filtering ───────────────────────────────────────────────────────
+    // ── Folder switch ─────────────────────────────────────────────────────────
 
-    const folderStatusMap = {
-        'Inbox': [1, 2],
-        'Unassigned': [1],
-        'Assigned': [2],
-        'Actioned': [4],
-        'Spam': [7],
-        'Promotions': [8],
-        'Trash': [9],
+    useEffect(() => {
+        if (prevFolderRef.current === null || prevFolderRef.current === folder) return;
+
+        prevFolderRef.current = folder;
+
+        if (folder === 'Pending Approvals') return;
+
+        setLoading(true);
+        setDocs([]);
+        setPage(1);
+        setHasMore(true);
+        setSelected(null);
+        loadDocs(folder, 1).finally(() => setLoading(false));
+    }, [folder]); // eslint-disable-line
+
+    // ── Folder change handler ─────────────────────────────────────────────────
+
+    const handleFolderChange = (f) => {
+        if (f === folder) return;
+        setFolder(f);
     };
 
-    const isChecksFolder = folder === 'Checks';
-    const isChecksSearch = folder === 'Search Checks';
+    // ── Load more ─────────────────────────────────────────────────────────────
 
-    const folderDocs = isChecksFolder
-        ? docs.filter(d => d.isCheck)
-        : docs.filter(d => (folderStatusMap[folder] ?? [1]).includes(d.statusId));
-    const inboxDocs = docs.filter(d => [1, 2].includes(d.statusId));
-
-    const unviewedCount = inboxDocs.filter(d => !d.isViewed).length;
-
-    const counts = {
-        'Inbox': unviewedCount,
-        'Unassigned': docs.filter(d => d.statusId === 1).length,
-        'Assigned': docs.filter(d => d.statusId === 2).length,
-        'Actioned': docs.filter(d => d.statusId === 4).length,
-        'Spam': docs.filter(d => d.statusId === 7).length,
-        'Promotions': docs.filter(d => d.statusId === 8).length,
-        'Trash': docs.filter(d => d.statusId === 9).length,
-        'Checks': docs.filter(d => d.isCheck).length,
+    const handleLoadMore = async () => {
+        const nextPage = page + 1;
+        setLoadingMore(true);
+        await loadDocs(folder, nextPage, true);
+        setPage(nextPage);
+        setLoadingMore(false);
     };
 
-    // ── Handlers ───────────────────────────────────────────────────────────────
+    // ── Handlers ──────────────────────────────────────────────────────────────
 
     const handleAssigned = (documentId) => {
         localAssigned.current[documentId] = Date.now();
@@ -114,6 +192,7 @@ const MailPortal = () => {
         setSelected(prev =>
             prev?.documentId === documentId ? { ...prev, statusId: 2, statusName: 'Assigned' } : prev
         );
+        loadCounts();
     };
 
     const handleReverted = (documentId, originalStatusId) => {
@@ -132,23 +211,25 @@ const MailPortal = () => {
             prev?.documentId === documentId
                 ? { ...prev, statusId: newStatusId, statusName: newStatusName } : prev
         );
+        loadCounts();
     };
 
     const handleDeleted = (documentId) => {
         setDocs(prev => prev.filter(d => d.documentId !== documentId));
         setSelected(prev => prev?.documentId === documentId ? null : prev);
+        loadCounts();
     };
 
     const handleSelect = async (doc) => {
         setSelected(doc);
-
         if (!doc.isViewed) {
             try {
                 await axios.post('/api/admin/mark-viewed', { documentId: doc.documentId });
                 setDocs(prev => prev.map(d =>
                     d.documentId === doc.documentId ? { ...d, isViewed: true } : d
                 ));
-            } catch { /* silent */ }
+                loadCounts();
+            } catch { }
         }
     };
 
@@ -158,64 +239,64 @@ const MailPortal = () => {
             setDocs(prev => prev.map(d =>
                 d.documentId === documentId ? { ...d, isViewed: false } : d
             ));
-        } catch { /* silent */ }
+            loadCounts();
+        } catch { }
     };
 
     const handleMarkAllRead = async () => {
-        const unread = inboxDocs.filter(d => !d.isViewed);
+        const unread = docs.filter(d => !d.isViewed);
         await Promise.allSettled(
             unread.map(d => axios.post('/api/admin/mark-viewed', { documentId: d.documentId }))
         );
-        setDocs(prev => prev.map(d =>
-            [1, 2].includes(d.statusId) ? { ...d, isViewed: true } : d
-        ));
+        setDocs(prev => prev.map(d => ({ ...d, isViewed: true })));
+        loadCounts();
     };
 
-    // ── Render ─────────────────────────────────────────────────────────────────
+    // ── Sidebar counts ────────────────────────────────────────────────────────
 
-    const isStaffSearch = folder === 'Search by Staff';
-    const isSenderSearch = folder === 'Search by Sender';
-    const isSearch = isStaffSearch || isSenderSearch || isChecksSearch;
+    const sidebarCounts = {
+        'Inbox': counts.inbox ?? 0,
+        'Unassigned': counts.unassigned ?? 0,
+        'Assigned': counts.assigned ?? 0,
+        'Actioned': counts.actioned ?? 0,
+        'Spam': counts.spam ?? 0,
+        'Promotions': counts.promotions ?? 0,
+        'Trash': counts.trash ?? 0,
+        'Pending Approvals': pendingCount,
+        'Checks': counts.checks ?? 0,
+    };
+
+    const isPendingApprovals = folder === 'Pending Approvals';
 
     return (
         <div style={styles.root}>
             <MailSidebar
                 folder={folder}
-                onFolder={f => { setFolder(f); setSelected(null); }}
-                counts={counts}
+                onFolder={handleFolderChange}
+                counts={sidebarCounts}
                 onMarkAllRead={handleMarkAllRead}
             />
 
-            {isStaffSearch && (
-                <MailSearch
+            {isPendingApprovals && (
+                <PendingApprovals
                     staff={staff}
                     selected={selected}
                     onSelect={handleSelect}
+                    onApproved={loadCounts}
                 />
             )}
 
-            {isSenderSearch && (
-                <SenderSearch
-                    selected={selected}
-                    onSelect={handleSelect}
-                />
-            )}
-
-            {isChecksSearch && (
-                <ChecksSearch
-                    selected={selected}
-                    onSelect={handleSelect}
-                />
-            )}
-
-            {!isSearch && !isChecksSearch && (
+            {!isPendingApprovals && (
                 <MailList
-                    docs={folderDocs}
+                    docs={docs}
                     selected={selected}
                     loading={loading}
+                    loadingMore={loadingMore}
+                    hasMore={hasMore}
                     folder={folder}
                     onSelect={handleSelect}
                     onMarkUnread={handleMarkUnread}
+                    onLoadMore={handleLoadMore}
                 />
             )}
 

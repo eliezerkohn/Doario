@@ -15,6 +15,32 @@ public class DocumentFeedbackRepository : IDocumentFeedbackRepository
         await _db.SaveChangesAsync();
     }
 
+
+    public async Task<List<DocumentFeedback>> GetAssignmentCorrectionsAsync(Guid tenantId, string ocrText)
+    {
+        var topText = ocrText.Length > 200 ? ocrText[..200] : ocrText;
+        var keywords = topText
+            .Split(new[] { ' ', '\n', '\r', ',', '.', '\t' }, StringSplitOptions.RemoveEmptyEntries)
+            .Where(w => w.Length >= 4)
+            .Select(w => w.ToLowerInvariant())
+            .Distinct()
+            .Take(10)
+            .ToList();
+
+        var all = await _db.DocumentFeedbacks
+            .Where(f => f.TenantId == tenantId && f.FeedbackTypeId == 2) // 2 = AssignmentCorrection
+            .OrderByDescending(f => f.CreatedAt)
+            .ToListAsync();
+
+        if (!keywords.Any()) return all.Take(5).ToList();
+
+        return all
+            .Where(f => !string.IsNullOrWhiteSpace(f.DocumentSnippet) &&
+                        keywords.Any(k => f.DocumentSnippet.ToLowerInvariant().Contains(k)))
+            .ToList();
+    }
+
+
     /// <summary>
     /// Returns last 10 corrections for this tenant globally.
     /// General baseline — not sender-specific.

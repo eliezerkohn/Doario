@@ -12,4 +12,10 @@ public interface IDocumentViewedRepository
 
     /// <summary>Returns all viewed document IDs for this tenant.</summary>
     Task<HashSet<Guid>> GetViewedDocumentIdsAsync(Guid tenantId);
+
+    /// <summary>
+    /// Returns viewed document IDs scoped to a specific set of document IDs.
+    /// Much faster than loading all viewed IDs — only checks the current page.
+    /// </summary>
+    Task<HashSet<Guid>> GetViewedDocumentIdsAsync(Guid tenantId, IEnumerable<Guid> documentIds);
 }

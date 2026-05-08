@@ -118,6 +118,22 @@ public class Program
         builder.Services.AddScoped<IExtractionFieldRepository, ExtractionFieldRepository>();
         builder.Services.AddScoped<IDocumentCheckRepository, DocumentCheckRepository>();
 
+        builder.Services.AddScoped<IAiSuggestionRepository, AiSuggestionRepository>();
+        builder.Services.AddScoped<ITenantAiSettingsRepository, TenantAiSettingsRepository>();
+        builder.Services.AddScoped<AiAssignmentService>();
+        builder.Services.AddScoped<ITenantInboxSettingsRepository, TenantInboxSettingsRepository>();
+        builder.Services.AddScoped<ITenantMonitoredInboxRepository, TenantMonitoredInboxRepository>();
+        builder.Services.AddSingleton<AiProcessingQueue>();
+
+        builder.Services.AddScoped<StripeService>();
+
+        builder.Services.AddSingleton<ApproveAllQueue>();
+
+        builder.Services.AddSingleton<ProcessInboxQueue>();
+
+        // ── Background Services ───────────────────────────────────────────────
+        builder.Services.AddHostedService<DoarioBackgroundService>();
+
         var app = builder.Build();
 
         // ── Pipeline ──────────────────────────────────────────────────────────

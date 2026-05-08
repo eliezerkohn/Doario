@@ -23,7 +23,7 @@ const stripMarkup = (html) => {
 
 const TABS = ['All', 'Unassigned', 'Assigned', 'Actioned'];
 
-const SenderSearch = ({ selected, onSelect }) => {
+const SenderSearch = ({ selected, onSelect, hideHeader }) => {
     const [input, setInput] = useState('');
     const [query, setQuery] = useState('');
     const [results, setResults] = useState([]);
@@ -98,9 +98,9 @@ const SenderSearch = ({ selected, onSelect }) => {
     return (
         <div style={styles.panel}>
 
-            <div style={styles.header}>
+            {!hideHeader && <div style={styles.header}>
                 <h2 style={styles.title}>Search by Sender</h2>
-            </div>
+            </div>}
 
             <div style={styles.searchSection}>
                 <div style={styles.inputWrap}>

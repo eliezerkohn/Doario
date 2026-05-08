@@ -33,6 +33,12 @@ public class DoarioDataContext : DbContext
     public DbSet<TenantConnectorConfig> TenantConnectorConfigs { get; set; }
     public DbSet<SubscriptionPlan> SubscriptionPlans { get; set; }  // ← NEW
 
+    public DbSet<TenantInboxSettings> TenantInboxSettings { get; set; }
+    public DbSet<TenantMonitoredInbox> TenantMonitoredInboxes { get; set; }
+
+    public DbSet<TenantBillingUsage> TenantBillingUsages { get; set; }
+    public DbSet<TenantPromo> TenantPromos { get; set; }
+
     // Lookups
     public DbSet<DocumentStatus> DocumentStatuses { get; set; }
     public DbSet<SenderType> SenderTypes { get; set; }
@@ -56,6 +62,10 @@ public class DoarioDataContext : DbContext
     public DbSet<DocumentViewed> DocumentVieweds { get; set; }
     public DbSet<TenantExtractionField> TenantExtractionFields { get; set; }
     public DbSet<DocumentCheck> DocumentChecks { get; set; }
+    public DbSet<SuggestionStatus> SuggestionStatuses { get; set; }
+    public DbSet<TenantAiSettings> TenantAiSettings { get; set; }
+    public DbSet<DocumentAiSuggestion> DocumentAiSuggestions { get; set; }
+    public DbSet<PromoCode> PromoCodes { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -95,6 +105,12 @@ public class DoarioDataContext : DbContext
 
         modelBuilder.Entity<Document>()
             .Property(d => d.SenderMatchConfidence).HasPrecision(5, 2);
+
+        modelBuilder.Entity<Document>()
+            .HasOne(d => d.SourceType)
+            .WithMany()
+            .HasForeignKey(d => d.SourceTypeId)
+            .OnDelete(DeleteBehavior.Restrict);
 
         modelBuilder.Entity<DocumentAssignment>()
             .Property(d => d.AIConfidence).HasPrecision(5, 2);
@@ -152,6 +168,90 @@ public class DoarioDataContext : DbContext
                 .OnDelete(DeleteBehavior.Restrict);
         });
 
+        // ── SuggestionStatus ──────────────────────────────────────────────────
+        modelBuilder.Entity<SuggestionStatus>(e =>
+        {
+            e.HasKey(x => x.SuggestionStatusId);
+            e.Property(x => x.Name).IsRequired().HasMaxLength(50);
+        });
+
+        // ── TenantAiSettings ──────────────────────────────────────────────────
+        modelBuilder.Entity<TenantAiSettings>(e =>
+        {
+            e.HasKey(x => x.TenantAiSettingsId);
+            e.Property(x => x.AiAssignmentMode).IsRequired().HasMaxLength(50).HasDefaultValue("AutoAssign");
+            e.Property(x => x.AiConfidenceThreshold).HasDefaultValue(8);
+            e.HasOne(x => x.Tenant)
+                .WithMany()
+                .HasForeignKey(x => x.TenantId)
+                .OnDelete(DeleteBehavior.Restrict);
+            e.HasIndex(x => x.TenantId).IsUnique();
+        });
+
+        // ── DocumentAiSuggestion ──────────────────────────────────────────────
+        modelBuilder.Entity<DocumentAiSuggestion>(e =>
+        {
+            e.HasKey(x => x.DocumentAiSuggestionId);
+            e.Property(x => x.SuggestedEmail).IsRequired().HasMaxLength(200);
+            e.HasOne(x => x.Document)
+                .WithMany()
+                .HasForeignKey(x => x.DocumentId)
+                .OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(x => x.Tenant)
+                .WithMany()
+                .HasForeignKey(x => x.TenantId)
+                .OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(x => x.SuggestedStaff)
+                .WithMany()
+                .HasForeignKey(x => x.SuggestedStaffId)
+                .OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(x => x.SuggestionStatus)
+                .WithMany()
+                .HasForeignKey(x => x.SuggestionStatusId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // ── DocumentFeedback — FeedbackTypeId default ─────────────────────────
+        modelBuilder.Entity<DocumentFeedback>(e =>
+        {
+            e.Property(x => x.FeedbackTypeId).HasDefaultValue(1);
+        });
+
+        // ── TenantMonitoredInbox ──────────────────────────────────────────────
+        modelBuilder.Entity<TenantMonitoredInbox>(e =>
+        {
+            e.HasKey(x => x.TenantMonitoredInboxId);
+            e.Property(x => x.EmailAddress).IsRequired().HasMaxLength(200);
+            e.Property(x => x.Description).IsRequired().HasMaxLength(200).HasDefaultValue("");
+            e.Property(x => x.PollingIntervalSeconds).HasDefaultValue(60);
+            e.Property(x => x.EndDate).HasDefaultValue(DateTime.MaxValue);
+            e.HasOne(x => x.Tenant)
+                .WithMany()
+                .HasForeignKey(x => x.TenantId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // ── TenantInboxSettings ───────────────────────────────────────────────
+        modelBuilder.Entity<TenantInboxSettings>(e =>
+        {
+            e.HasKey(x => x.TenantInboxSettingsId);
+            e.Property(x => x.InboxPollingIntervalSeconds).HasDefaultValue(60);
+            e.Property(x => x.StaffSyncIntervalHours).HasDefaultValue(24);
+            e.HasOne(x => x.Tenant)
+                .WithMany()
+                .HasForeignKey(x => x.TenantId)
+                .OnDelete(DeleteBehavior.Restrict);
+            e.HasIndex(x => x.TenantId).IsUnique();
+        });
+
+        modelBuilder.Entity<TenantBillingUsage>().ToTable("TenantBillingUsage");
+        modelBuilder.Entity<TenantPromo>().ToTable("TenantPromo");
+
+        modelBuilder.Entity<TenantPromo>().ToTable("TenantPromo");
+        modelBuilder.Entity<PromoCode>().ToTable("PromoCodes");
+
+
         DoarioDataSeeder.Seed(modelBuilder);
+
     }
 }

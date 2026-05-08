@@ -14,12 +14,11 @@ const C = {
 
 const folders = [
     { name: 'Inbox', icon: '📥', showCount: true, canMarkAllRead: true, group: 'Main' },
+    { name: 'Pending Approvals', icon: '🤖', showCount: true, canMarkAllRead: false, group: 'Main' },
     { name: 'Unassigned', icon: '📋', showCount: true, canMarkAllRead: false, group: 'Main' },
     { name: 'Assigned', icon: '✅', showCount: false, canMarkAllRead: false, group: 'Main' },
     { name: 'Actioned', icon: '☑️', showCount: false, canMarkAllRead: false, group: 'Main' },
-    { name: 'Search by Staff', icon: '👤', showCount: false, canMarkAllRead: false, group: 'Tools' },
-    { name: 'Search by Sender', icon: '✉️', showCount: false, canMarkAllRead: false, group: 'Tools' },
-    { name: 'Search Checks', icon: '🔍', showCount: false, canMarkAllRead: false, group: 'Tools' },
+
     { name: 'Spam', icon: '🚫', showCount: true, canMarkAllRead: false, group: 'Filtered' },
     { name: 'Promotions', icon: '📢', showCount: true, canMarkAllRead: false, group: 'Filtered' },
     { name: 'Trash', icon: '🗑️', showCount: false, canMarkAllRead: false, group: 'Filtered' },
@@ -37,7 +36,7 @@ const MailSidebar = ({ folder, onFolder, counts, onMarkAllRead }) => {
     const [menuOpen, setMenuOpen] = useState(false);
     const [badgeHovered, setBadgeHovered] = useState(false);
 
-    const groups = ['Main', 'Tools', 'Filtered'];
+    const groups = ['Main', 'Filtered'];
 
     const handleFolderClick = (f) => {
         setMenuOpen(false);

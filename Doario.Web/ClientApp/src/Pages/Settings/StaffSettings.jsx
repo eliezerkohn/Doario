@@ -1,10 +1,18 @@
 // StaffSettings.jsx
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import axios from 'axios';
 import { S, Shared } from './SettingsShared';
 
 export default function StaffSettings() {
+
+    // ── Sync Schedule ────────────────────────────────────────────
+    const [syncIntervalHours, setSyncIntervalHours] = useState(24);
+    const [lastStaffSyncAt, setLastStaffSyncAt] = useState(null);
+    const [scheduleLoading, setScheduleLoading] = useState(true);
+    const [scheduleSaving, setScheduleSaving] = useState(false);
+    const [scheduleMsg, setScheduleMsg] = useState(null);
+    const [scheduleError, setScheduleError] = useState(null);
 
     // ── M365 Sync ────────────────────────────────────────────────
     const [syncing, setSyncing] = useState(false);
@@ -18,6 +26,45 @@ export default function StaffSettings() {
     const [csvResult, setCsvResult] = useState(null);
     const [csvError, setCsvError] = useState(null);
 
+    useEffect(() => {
+        axios.get('/api/settings/staff-sync-schedule')
+            .then(r => {
+                setSyncIntervalHours(r.data.staffSyncIntervalHours ?? 24);
+                setLastStaffSyncAt(r.data.lastStaffSyncAt ?? null);
+            })
+            .catch(() => { })
+            .finally(() => setScheduleLoading(false));
+    }, []);
+
+    // ── Sync Schedule save ────────────────────────────────────────
+    const handleSaveSchedule = async () => {
+        setScheduleSaving(true);
+        setScheduleMsg(null);
+        setScheduleError(null);
+        try {
+            await axios.put('/api/settings/staff-sync-schedule', {
+                staffSyncIntervalHours: syncIntervalHours,
+            });
+            setScheduleMsg('Sync schedule updated.');
+            setTimeout(() => setScheduleMsg(null), 3000);
+        } catch {
+            setScheduleError('Failed to save schedule.');
+        } finally {
+            setScheduleSaving(false);
+        }
+    };
+
+    const formatDate = (dateStr) => {
+        if (!dateStr) return 'Never';
+        const d = new Date(dateStr.endsWith('Z') ? dateStr : dateStr + 'Z');
+        if (d.getFullYear() < 2020) return 'Never';
+        if (d.getFullYear() < 2000) return 'Never';
+        return d.toLocaleDateString([], {
+            month: 'short', day: 'numeric', year: 'numeric',
+            hour: '2-digit', minute: '2-digit'
+        });
+    };
+
     // ── Sync handler ─────────────────────────────────────────────
     const handleSync = async () => {
         setSyncing(true);
@@ -26,6 +73,13 @@ export default function StaffSettings() {
         try {
             const res = await axios.post('/api/settings/sync-staff');
             setSyncMsg(res.data.message);
+            // Re-fetch schedule to get confirmed server time
+            axios.get('/api/settings/staff-sync-schedule')
+                .then(r => {
+                    setSyncIntervalHours(r.data.staffSyncIntervalHours ?? 24);
+                    setLastStaffSyncAt(r.data.lastStaffSyncAt ?? null);
+                })
+                .catch(() => setLastStaffSyncAt(new Date().toISOString()));
         } catch (err) {
             setSyncError(err.response?.data?.error || 'Sync failed.');
         } finally {
@@ -84,6 +138,49 @@ export default function StaffSettings() {
 
                 {syncMsg && <div style={{ ...S.msg, ...S.msgSuccess }}>✅ {syncMsg}</div>}
                 {syncError && <div style={{ ...S.msg, ...S.msgError }}>❌ {syncError}</div>}
+            </div>
+
+            {/* ── Sync Schedule ── */}
+            <div style={S.card}>
+                <div style={cardTitle}>Automatic Sync Schedule</div>
+                <div style={cardSub}>
+                    Doario can automatically sync your staff from Microsoft 365 on a schedule.
+                    The sync runs in the background — no action needed.
+                </div>
+
+                {!scheduleLoading && (
+                    <>
+                        <label style={S.label}>Sync every</label>
+                        <div style={scheduleRow}>
+                            <input
+                                style={{ ...S.input, ...scheduleInput }}
+                                type="number"
+                                min={1}
+                                max={168}
+                                value={syncIntervalHours}
+                                onChange={e => setSyncIntervalHours(parseInt(e.target.value) || 24)}
+                            />
+                            <span style={scheduleUnit}>hours</span>
+                            <span style={scheduleHint}>(min 1h)</span>
+                        </div>
+
+                        <div style={statusRow}>
+                            <span style={statusLabel}>Last synced</span>
+                            <span style={statusValue}>{formatDate(lastStaffSyncAt)}</span>
+                        </div>
+
+                        <button
+                            style={{ ...S.btnPrimary, opacity: scheduleSaving ? 0.6 : 1, marginTop: 12 }}
+                            onClick={handleSaveSchedule}
+                            disabled={scheduleSaving}
+                        >
+                            {scheduleSaving ? 'Saving...' : 'Save Schedule'}
+                        </button>
+
+                        {scheduleMsg && <div style={{ ...S.msg, ...S.msgSuccess }}>✅ {scheduleMsg}</div>}
+                        {scheduleError && <div style={{ ...S.msg, ...S.msgError }}>❌ {scheduleError}</div>}
+                    </>
+                )}
             </div>
 
             {/* ── CSV Import ── */}
@@ -195,6 +292,13 @@ const statBox = {
 const statNum = {
     fontSize: 22, fontWeight: 800, color: '#0d9488', marginBottom: 2,
 };
+const scheduleRow = { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 };
+const scheduleInput = { width: 80, marginBottom: 0 };
+const scheduleUnit = { fontSize: 12, color: '#4a6478', fontWeight: 600 };
+const scheduleHint = { fontSize: 11, color: '#7a9ab0' };
+const statusRow = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', fontSize: 12 };
+const statusLabel = { color: '#4a6478', fontWeight: 600 };
+const statusValue = { color: '#1a2e3b' };
 const statLabel = {
     fontSize: 10, color: '#7a9ab0',
     textTransform: 'uppercase', letterSpacing: '1px',

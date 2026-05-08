@@ -10,6 +10,9 @@ import IntegrationsSettings from './Pages/Settings/IntegrationsSettings';
 import SubscriptionSettings from './Pages/Settings/SubscriptionSettings';
 import BatchScanPage from './Pages/BatchScanPage';
 import ExtractionFieldsSettings from './Pages/Settings/ExtractionFieldsSettings';
+import AiAssignmentSettings from './Pages/Settings/AiAssignmentSettings';
+import InboxSettings from './Pages/Settings/InboxSettings';
+import BillingDashboard from './Pages/Settings/BillingDashboard';
 
 function App() {
     return (
@@ -25,7 +28,10 @@ function App() {
                     <Route path="staff" element={<StaffSettings />} />
                     <Route path="integrations" element={<IntegrationsSettings />} />
                     <Route path="subscription" element={<SubscriptionSettings />} />
+                    <Route path="billing" element={<BillingDashboard />} />  
                     <Route path="extraction-fields" element={<ExtractionFieldsSettings />} />
+                    <Route path="ai-assignment" element={<AiAssignmentSettings />} />
+                    <Route path="inbox" element={<InboxSettings />} />
                 </Route>
             </Route>
         </Routes>

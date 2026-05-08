@@ -1,9 +1,13 @@
 ﻿// BatchScanPage.jsx — Scan → AI splits → review → confirm to save
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 
 const BRIDGE_URL = 'http://localhost:5100';
+const IDB_NAME = 'doario_scan';
+const IDB_VERSION = 1;
+const IDB_STORE = 'session';
+const SESSION_KEY = 'current';
 
 const STATUS = {
     CHECKING: 'checking',
@@ -14,6 +18,49 @@ const STATUS = {
     DONE: 'done',
     ERROR: 'error',
 };
+
+// ── IndexedDB helpers ─────────────────────────────────────────────────────────
+
+const openDB = () => new Promise((resolve, reject) => {
+    const req = indexedDB.open(IDB_NAME, IDB_VERSION);
+    req.onupgradeneeded = e => {
+        e.target.result.createObjectStore(IDB_STORE);
+    };
+    req.onsuccess = e => resolve(e.target.result);
+    req.onerror = () => reject(req.error);
+});
+
+const idbGet = async (key) => {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction(IDB_STORE, 'readonly');
+        const req = tx.objectStore(IDB_STORE).get(key);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+    });
+};
+
+const idbSet = async (key, value) => {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction(IDB_STORE, 'readwrite');
+        const req = tx.objectStore(IDB_STORE).put(value, key);
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(req.error);
+    });
+};
+
+const idbDelete = async (key) => {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction(IDB_STORE, 'readwrite');
+        const req = tx.objectStore(IDB_STORE).delete(key);
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(req.error);
+    });
+};
+
+// ── Component ─────────────────────────────────────────────────────────────────
 
 export default function BatchScanPage() {
 
@@ -26,13 +73,55 @@ export default function BatchScanPage() {
     const [error, setError] = useState(null);
     const [batchScanId, setBatchScanId] = useState(null);
 
-    useEffect(() => { checkBridge(); }, []);
+    const previewRef = useRef(null);
+    const sessionRestored = useRef(false);
 
-    const checkBridge = async () => {
-        setStatus(STATUS.CHECKING);
+    // ── Restore session from IndexedDB on mount ───────────────────────────────
+    useEffect(() => {
+        idbGet(SESSION_KEY).then(saved => {
+            if (saved && saved.documents && saved.documents.length > 0) {
+                setDocuments(saved.documents);
+                setSelected(saved.documents[0]);
+                setBatchScanId(saved.batchScanId ?? null);
+                setStatus(STATUS.DONE);
+                sessionRestored.current = true;
+            }
+        }).catch(() => { /* no session — ignore */ });
+    }, []);
+
+    // ── Save session to IndexedDB whenever documents change ───────────────────
+    useEffect(() => {
+        if (documents.length === 0) return;
+        idbSet(SESSION_KEY, {
+            documents,
+            batchScanId,
+        }).catch(() => { /* storage error — ignore */ });
+    }, [documents, batchScanId]);
+
+    // ── Scroll to top when selected document changes ──────────────────────────
+    useEffect(() => {
+        if (previewRef.current) {
+            previewRef.current.scrollTop = 0;
+        }
+    }, [selected?.tempId]);
+
+    useEffect(() => { checkBridge(sessionRestored.current, false); }, []);
+
+    // ── Clear IndexedDB session ───────────────────────────────────────────────
+    const clearSession = () => {
+        idbDelete(SESSION_KEY).catch(() => { });
+    };
+
+    // ── Check bridge health and scanner list ──────────────────────────────────
+    // forceRefresh=true passes ?refresh=true to bypass cache and call TWAIN immediately
+    const checkBridge = async (skipStatusReset = false, forceRefresh = false) => {
+        if (!skipStatusReset) setStatus(STATUS.CHECKING);
         try {
             const healthRes = await axios.get(`${BRIDGE_URL}/health`, { timeout: 3000 });
-            const scannersRes = await axios.get(`${BRIDGE_URL}/scanners`, { timeout: 3000 });
+            const scannersUrl = forceRefresh
+                ? `${BRIDGE_URL}/scanners?refresh=true`
+                : `${BRIDGE_URL}/scanners`;
+            const scannersRes = await axios.get(scannersUrl, { timeout: 3000 });
             const scannerList = scannersRes.data.scanners ?? [];
             setScanners(scannerList);
 
@@ -45,14 +134,14 @@ export default function BatchScanPage() {
 
             if (healthRes.data.isConfigured && scannerList.length > 0) {
                 setBridgeStatus(STATUS.READY);
-                setStatus(STATUS.READY);
+                if (!sessionRestored.current) setStatus(STATUS.READY);
             } else {
                 setBridgeStatus(STATUS.NOT_FOUND);
-                setStatus(STATUS.NOT_FOUND);
+                if (!sessionRestored.current) setStatus(STATUS.NOT_FOUND);
             }
         } catch {
             setBridgeStatus(STATUS.NOT_FOUND);
-            setStatus(STATUS.NOT_FOUND);
+            if (!sessionRestored.current) setStatus(STATUS.NOT_FOUND);
         }
     };
 
@@ -63,6 +152,7 @@ export default function BatchScanPage() {
         setSelected(null);
         setError(null);
         setBatchScanId(null);
+        clearSession();
 
         try {
             const scanRes = await axios.post(
@@ -84,8 +174,6 @@ export default function BatchScanPage() {
                 return;
             }
 
-            // ── Step 2: Send to backend for AI splitting ──────────────────────
-            // Backend returns boundaries only — nothing uploaded to SharePoint yet
             setStatus(STATUS.SPLITTING);
 
             const splitRes = await axios.post(`${BRIDGE_URL}/upload`, { pages });
@@ -105,9 +193,7 @@ export default function BatchScanPage() {
                     tempId: d.tempId,
                     index: i,
                     label: `Document ${i + 1}`,
-                    pageRange: pageCount === 1
-                        ? `1 page`
-                        : `${pageCount} pages`,
+                    pageRange: pageCount === 1 ? `1 page` : `${pageCount} pages`,
                     pageStart: d.pageStart,
                     pageEnd: d.pageEnd,
                     pages: nonBlankPages,
@@ -129,7 +215,7 @@ export default function BatchScanPage() {
         }
     };
 
-    // ── Confirm one document — builds PDF, uploads to SharePoint, creates DB record ──
+    // ── Confirm one document ──────────────────────────────────────────────────
     const handleConfirm = async (doc) => {
         setDocuments(prev => prev.map(d =>
             d.tempId === doc.tempId ? { ...d, confirming: true } : d
@@ -144,15 +230,20 @@ export default function BatchScanPage() {
                 pageEnd: doc.pageEnd,
             });
 
-            setDocuments(prev => prev.map(d =>
-                d.tempId === doc.tempId ? {
-                    ...d,
-                    confirmed: true,
-                    confirming: false,
-                    documentId: res.data.documentId,
-                    sharePointUrl: res.data.sharePointUrl,
-                } : d
-            ));
+            let allDone = false;
+            setDocuments(prev => {
+                const next = prev.map(d =>
+                    d.tempId === doc.tempId ? {
+                        ...d,
+                        confirmed: true,
+                        confirming: false,
+                        documentId: res.data.documentId,
+                        sharePointUrl: res.data.sharePointUrl,
+                    } : d
+                );
+                allDone = next.every(d => d.confirmed);
+                return next;
+            });
 
             setSelected(prev =>
                 prev?.tempId === doc.tempId ? {
@@ -180,13 +271,14 @@ export default function BatchScanPage() {
         }
     };
 
-    // ── Delete — removes from list, never uploaded ────────────────────────────
+    // ── Delete ────────────────────────────────────────────────────────────────
     const handleDelete = (doc) => {
         const remaining = documents.filter(d => d.tempId !== doc.tempId);
         setDocuments(remaining);
         if (selected?.tempId === doc.tempId) {
             setSelected(remaining[0] ?? null);
         }
+        if (remaining.length === 0) clearSession();
     };
 
     // ── Rescan one document ───────────────────────────────────────────────────
@@ -206,7 +298,6 @@ export default function BatchScanPage() {
 
             const newPages = scanRes.data.pages;
 
-            // If already confirmed, tell backend to delete old SharePoint file + DB record
             const rescanRes = await axios.post(`${BRIDGE_URL}/rescan`, {
                 pages: newPages,
                 oldDocumentId: doc.documentId ?? null,
@@ -240,17 +331,28 @@ export default function BatchScanPage() {
         }
     };
 
-    // ── Rescan all — start from scratch ──────────────────────────────────────
+    // ── Rescan all ────────────────────────────────────────────────────────────
     const handleRescanAll = () => {
+        clearSession();
         setDocuments([]);
         setSelected(null);
         setBatchScanId(null);
         setError(null);
+        sessionRestored.current = false;
+        setStatus(STATUS.READY);
+    };
+
+    const handleDone = () => {
+        clearSession();
+        setDocuments([]);
+        setSelected(null);
+        setBatchScanId(null);
+        setError(null);
+        sessionRestored.current = false;
         setStatus(STATUS.READY);
     };
 
     const allConfirmed = documents.length > 0 && documents.every(d => d.confirmed);
-    const anyConfirmed = documents.some(d => d.confirmed);
     const openSharePoint = (url) => window.open(url, '_blank');
 
     return (
@@ -276,16 +378,14 @@ export default function BatchScanPage() {
                                     <option key={s} value={s}>{s}</option>
                                 ))}
                             </select>
-                            <button style={S.btnRefresh} onClick={checkBridge}
+                            {/* forceRefresh=true — bypasses cache and calls TWAIN immediately */}
+                            <button
+                                style={S.btnRefresh}
+                                onClick={() => checkBridge(false, true)}
                                 disabled={status === STATUS.SCANNING || status === STATUS.SPLITTING}
-                                title="Refresh scanner list">⟳</button>
+                                title="Refresh scanner list"
+                            >⟳</button>
                         </div>
-                    )}
-
-                    {status === STATUS.DONE && documents.length > 0 && (
-                        <button style={S.btnSecondary} onClick={handleRescanAll}>
-                            Rescan All
-                        </button>
                     )}
 
                     <button
@@ -323,7 +423,7 @@ export default function BatchScanPage() {
                         Scanning is only available from the mailroom PC where DoarioScan is installed.
                         Download and install it from Settings → Integrations, then click Retry.
                     </div>
-                    <button style={S.btnSecondary} onClick={checkBridge}>Retry</button>
+                    <button style={S.btnSecondary} onClick={() => checkBridge(false, false)}>Retry</button>
                 </div>
             )}
 
@@ -354,7 +454,7 @@ export default function BatchScanPage() {
                 </div>
             )}
 
-            {/* Inline error (during confirm/rescan) */}
+            {/* Inline error */}
             {status === STATUS.DONE && error && (
                 <div style={S.inlineError}>
                     ⚠ {error}
@@ -366,7 +466,6 @@ export default function BatchScanPage() {
             {status === STATUS.DONE && documents.length > 0 && (
                 <div style={S.results}>
 
-                    {/* Document list */}
                     <div style={S.docList}>
                         <div style={S.docListHeader}>
                             <div style={S.docListTitle}>
@@ -374,7 +473,10 @@ export default function BatchScanPage() {
                             </div>
                             <div style={{ display: 'flex', gap: 6 }}>
                                 {allConfirmed
-                                    ? <div style={S.allConfirmedBadge}>✓ All saved</div>
+                                    ? <>
+                                        <div style={S.allConfirmedBadge}>✓ All saved</div>
+                                        <button style={S.btnDone} onClick={handleDone}>Done</button>
+                                    </>
                                     : <>
                                         <button style={S.btnConfirmAll} onClick={handleConfirmAll}>
                                             Save All
@@ -429,7 +531,6 @@ export default function BatchScanPage() {
                                     </span>
                                 </div>
                                 <div style={S.previewActions}>
-                                    {/* Delete — only if not yet confirmed */}
                                     {!selected.confirmed && (
                                         <button
                                             style={S.btnDelete}
@@ -439,16 +540,9 @@ export default function BatchScanPage() {
                                             🗑 Delete
                                         </button>
                                     )}
-
-                                    {/* Rescan — always available */}
-                                    <button
-                                        style={S.btnRescan}
-                                        onClick={() => handleRescan(selected)}
-                                    >
+                                    <button style={S.btnRescan} onClick={() => handleRescan(selected)}>
                                         ↺ Rescan
                                     </button>
-
-                                    {/* Confirm — only if not yet confirmed */}
                                     {!selected.confirmed && (
                                         <button
                                             style={S.btnConfirm}
@@ -458,8 +552,6 @@ export default function BatchScanPage() {
                                             {selected.confirming ? 'Saving…' : '✓ Confirm & Save'}
                                         </button>
                                     )}
-
-                                    {/* View in SharePoint — only after confirmed */}
                                     {selected.confirmed && selected.sharePointUrl && (
                                         <button
                                             style={S.spBtn}
@@ -471,8 +563,7 @@ export default function BatchScanPage() {
                                 </div>
                             </div>
 
-                            {/* All pages stacked vertically */}
-                            <div style={S.previewImageWrap}>
+                            <div ref={previewRef} style={S.previewImageWrap}>
                                 {(selected.pages ?? []).map((p, i) => (
                                     p ? (
                                         <div key={i} style={S.previewPageWrap}>
@@ -610,6 +701,11 @@ const S = {
         fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
     },
     allConfirmedBadge: { fontSize: 11, color: '#0d9488', fontWeight: 600 },
+    btnDone: {
+        padding: '5px 14px', background: '#0d9488', color: '#fff',
+        border: 'none', borderRadius: 6, fontSize: 11, fontWeight: 700,
+        cursor: 'pointer', fontFamily: 'inherit',
+    },
     docItem: {
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         padding: '12px 16px', borderBottom: '1px solid #f0f4f7',

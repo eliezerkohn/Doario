@@ -29,17 +29,31 @@ const formatSummary = (html) => {
 };
 
 const MailReader = ({ doc, staff, onAssign, localAssigned, onStatusChanged, onDeleted }) => {
+    const [fullDoc, setFullDoc] = React.useState(null);
+
+    React.useEffect(() => {
+        if (!doc?.documentId) { setFullDoc(null); return; }
+        setFullDoc(null); // clear while loading
+        axios.get(`/api/admin/document/${doc.documentId}`)
+            .then(r => setFullDoc(r.data))
+            .catch(() => setFullDoc(doc)); // fallback to passed doc
+    }, [doc?.documentId]);
+
+    // Merge: use fullDoc for heavy fields, doc for live status updates
+    const mergedDoc = fullDoc ? { ...fullDoc, ...doc, aiSummary: fullDoc.aiSummary, ocrText: fullDoc.ocrText } : doc;
     const [moving, setMoving] = useState(false);
     const [feedback, setFeedback] = useState(null);
     const [assignment, setAssignment] = useState(null);
     const [confirmDelete, setConfirmDelete] = useState(false);
     const [checkData, setCheckData] = useState(null);
+    const [aiSuggestion, setAiSuggestion] = useState(null);
 
     useEffect(() => {
         setAssignment(null);
         setFeedback(null);
         setConfirmDelete(false);
         setCheckData(null);
+        setAiSuggestion(null);
         if (!doc) return;
 
         axios.get(`/api/assignment/${doc.documentId}`)
@@ -49,6 +63,10 @@ const MailReader = ({ doc, staff, onAssign, localAssigned, onStatusChanged, onDe
         axios.get(`/api/admin/check/${doc.documentId}`)
             .then(res => setCheckData(res.data))
             .catch(() => setCheckData(null));
+
+        axios.get(`/api/assignment/suggestion/${doc.documentId}`)
+            .then(res => setAiSuggestion(res.data))
+            .catch(() => setAiSuggestion(null));
     }, [doc?.documentId]);
 
     if (!doc) {
@@ -68,7 +86,7 @@ const MailReader = ({ doc, staff, onAssign, localAssigned, onStatusChanged, onDe
     const isPromotion = effectiveStatusId === 8;
     const isTrashed = effectiveStatusId === 9;
     const isSpamOrPromo = isSpam || isPromotion;
-    const canAssign = !!doc.aiSummary && staff.length > 0 && !isSpamOrPromo && !isTrashed;
+    const canAssign = !!mergedDoc?.aiSummary && staff.length > 0 && !isSpamOrPromo && !isTrashed;
 
     const handleNotSpam = async () => {
         setMoving(true); setFeedback(null);
@@ -134,9 +152,21 @@ const MailReader = ({ doc, staff, onAssign, localAssigned, onStatusChanged, onDe
                             💰 Check
                         </span>
                     )}
-                    {!doc.aiSummary && !isTrashed && (
+                    {aiSuggestion && (
+                        <span style={{
+                            ...styles.confidencePill,
+                            ...(aiSuggestion.confidence >= 8
+                                ? styles.confidenceHigh
+                                : aiSuggestion.confidence >= 5
+                                    ? styles.confidenceMid
+                                    : styles.confidenceLow)
+                        }}>
+                            AI {aiSuggestion.confidence}/10
+                        </span>
+                    )}
+                    {!mergedDoc?.aiSummary && !isTrashed && (
                         <span style={styles.processingPill}>
-                            {doc.ocrText ? '⏳ Generating summary…' : '⏳ Processing…'}
+                            {mergedDoc?.ocrText ? '⏳ Generating summary…' : '⏳ Processing…'}
                         </span>
                     )}
                 </div>
@@ -186,7 +216,7 @@ const MailReader = ({ doc, staff, onAssign, localAssigned, onStatusChanged, onDe
                                 <button
                                     style={{ ...styles.assignBtn, ...(canAssign ? {} : styles.assignBtnDisabled) }}
                                     disabled={!canAssign}
-                                    title={!doc.aiSummary ? 'Waiting for AI summary' : ''}
+                                    title={!mergedDoc?.aiSummary ? 'Waiting for AI summary' : ''}
                                     onClick={() => onAssign(doc)}
                                 >
                                     {isAssigned ? 'Reassign' : 'Assign'}
@@ -283,7 +313,7 @@ const MailReader = ({ doc, staff, onAssign, localAssigned, onStatusChanged, onDe
 
             {/* AI Summary */}
             <div style={styles.body}>
-                {doc.aiSummary ? (
+                {mergedDoc?.aiSummary ? (
                     <>
                         <div style={styles.summaryHeader}>
                             <span style={styles.summaryDot} />
@@ -292,11 +322,11 @@ const MailReader = ({ doc, staff, onAssign, localAssigned, onStatusChanged, onDe
                         <div style={styles.summaryBox}>
                             <div
                                 style={styles.summary}
-                                dangerouslySetInnerHTML={{ __html: formatSummary(doc.aiSummary) }}
+                                dangerouslySetInnerHTML={{ __html: formatSummary(mergedDoc?.aiSummary) }}
                             />
                         </div>
                     </>
-                ) : doc.ocrText ? (
+                ) : mergedDoc?.ocrText ? (
                     <div style={styles.pending}>⏳ AI is generating the summary…</div>
                 ) : (
                     <div style={styles.pending}>⏳ Document is being processed…</div>
@@ -480,6 +510,13 @@ const styles = {
     },
     summary: { fontSize: 14, lineHeight: 2, color: '#1a2e3b' },
     pending: { fontSize: 14, color: '#6b8499', padding: '20px 0' },
+    confidencePill: {
+        fontSize: 11, fontWeight: 700, padding: '4px 10px',
+        borderRadius: 20, letterSpacing: 0.3,
+    },
+    confidenceHigh: { background: '#d1fae5', color: '#065f46' },
+    confidenceMid: { background: '#fef3c7', color: '#92400e' },
+    confidenceLow: { background: '#fee2e2', color: '#991b1b' },
     checkPill: {
         fontSize: 11, fontWeight: 700, padding: '4px 12px',
         borderRadius: 20, background: '#fef3c7', color: '#92400e',
