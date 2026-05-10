@@ -10,45 +10,26 @@ public class TenantSubscription
     public Tenant Tenant { get; set; }
 
     /// <summary>
-    /// Reference to the plan catalog entry this subscription was created from.
-    /// Nullable — subscriptions created before the plan catalog won't have this.
+    /// Reference to the plan this subscription was created from.
+    /// Follow this FK to get all pricing — MonthlyPrice, IncludedDocuments, ExtraDocumentPrice etc.
     /// </summary>
-    public Guid? SubscriptionPlanId { get; set; }
+    public Guid SubscriptionPlanId { get; set; }
     public SubscriptionPlan SubscriptionPlan { get; set; }
 
-    [Required, MaxLength(50)]
-    public string PlanName { get; set; }
-
-    public decimal MonthlyPrice { get; set; }
-    public int IncludedDocuments { get; set; }
-    public decimal ExtraDocumentPrice { get; set; }
     public decimal DiscountPercent { get; set; } = 0;
 
     /// <summary>
-    /// Price per staff member per month.
-    /// Used when billing model is per-staff rather than per-document.
-    /// 0 if using document-based pricing.
+    /// Stripe Plan Price ID — legacy, StripePriceId on SubscriptionPlan is source of truth.
     /// </summary>
-    public decimal PricePerStaff { get; set; } = 0;
-
-    /// <summary>
-    /// Documents included per staff member per month — pooled across tenant.
-    /// e.g. 50 means a 10-person tenant gets 500 docs/month total pool.
-    /// 0 if using document-based pricing.
-    /// </summary>
-    public int DocsPerStaff { get; set; } = 0;
-
-    [Required, MaxLength(100)]
+    [MaxLength(100)]
     public string StripePlanId { get; set; }
 
-    [Required, MaxLength(100)]
+    [MaxLength(100)]
     public string StripeSubscriptionId { get; set; }
 
     /// <summary>
     /// The Stripe Subscription Item ID for the metered usage line item.
     /// Required to report usage records via Stripe's metered billing API.
-    /// e.g. si_ABC123XYZ
-    /// Set when the metered subscription item is created in Stripe.
     /// </summary>
     [MaxLength(100)]
     public string StripeSubscriptionItemId { get; set; }

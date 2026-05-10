@@ -24,4 +24,10 @@ public interface IDocumentFeedbackRepository
     /// Used to teach AI who to assign documents to based on past corrections.
     /// </summary>
     Task<List<DocumentFeedback>> GetAssignmentCorrectionsAsync(Guid tenantId, string ocrText);
+
+    /// <summary>
+    /// Returns the most recent "not a check" corrections for this tenant.
+    /// Used to teach AI what NOT to flag as a physical paper check.
+    /// </summary>
+    Task<List<DocumentFeedback>> GetNotCheckCorrectionsAsync(Guid tenantId, int count = 10);
 }

@@ -17,6 +17,7 @@ public class SubscriptionRepository : ISubscriptionRepository
         var now = DateTime.UtcNow;
 
         return await _db.TenantSubscriptions
+            .Include(s => s.SubscriptionPlan)
             .Where(s => s.TenantId == tenantId
                      && s.StartDate <= now
                      && s.EndDate >= now)
@@ -26,7 +27,7 @@ public class SubscriptionRepository : ISubscriptionRepository
 
     /// <summary>
     /// Ends the current active subscription and creates a new one from the given plan.
-    /// Preserves StripeCustomerId linkage — Stripe subscription switching handled separately.
+    /// Pricing is read from SubscriptionPlan — nothing is snapshotted on TenantSubscription.
     /// </summary>
     public async Task<TenantSubscription> SwitchPlanAsync(Guid tenantId, SubscriptionPlan newPlan)
     {
@@ -37,16 +38,12 @@ public class SubscriptionRepository : ISubscriptionRepository
             .Where(s => s.TenantId == tenantId && s.EndDate == DateTime.MaxValue)
             .ExecuteUpdateAsync(s => s.SetProperty(x => x.EndDate, now));
 
-        // Create new subscription from plan
+        // Create new subscription pointing to the plan — pricing lives on SubscriptionPlan
         var newSub = new TenantSubscription
         {
             TenantSubscriptionId = Guid.NewGuid(),
             TenantId = tenantId,
             SubscriptionPlanId = newPlan.SubscriptionPlanId,
-            PlanName = newPlan.Name,
-            MonthlyPrice = newPlan.MonthlyPrice,
-            IncludedDocuments = newPlan.IncludedDocuments,
-            ExtraDocumentPrice = newPlan.ExtraDocumentPrice,
             DiscountPercent = 0,
             StripePlanId = newPlan.StripePriceId ?? string.Empty,
             StripeSubscriptionId = string.Empty,

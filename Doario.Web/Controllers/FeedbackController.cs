@@ -14,39 +14,36 @@ public class FeedbackController : ControllerBase
     private readonly IDocumentFeedbackRepository _feedback;
     private readonly ITenantWhitelistedSenderRepository _whitelist;
     private readonly IDocumentRepository _documents;
+    private readonly IDocumentCheckRepository _checks;
     private readonly TenantContext _tenant;
 
     public FeedbackController(
         IDocumentFeedbackRepository feedback,
         ITenantWhitelistedSenderRepository whitelist,
         IDocumentRepository documents,
+        IDocumentCheckRepository checks,
         TenantContext tenant)
     {
         _feedback = feedback;
         _whitelist = whitelist;
         _documents = documents;
+        _checks = checks;
         _tenant = tenant;
     }
 
     /// <summary>
     /// POST /api/feedback/not-spam
-    /// Called when admin clicks "Not Spam" on a spam-classified document.
-    /// Spam is SENDER-based — the sender itself is the problem, not the message.
     /// </summary>
     [HttpPost("not-spam")]
     public async Task<IActionResult> MarkNotSpam([FromBody] FeedbackRequest request)
     {
-        if (!_tenant.IsResolved)
-            return Unauthorized();
+        if (!_tenant.IsResolved) return Unauthorized();
 
         var doc = await _documents.GetByIdAsync(request.DocumentId, _tenant.TenantId);
-        if (doc is null)
-            return NotFound();
+        if (doc is null) return NotFound();
 
-        // 1. Move back to Unassigned
         await _documents.UpdateStatusAsync(request.DocumentId, 1);
 
-        // 2. Record correction for AI learning
         var snippet = string.IsNullOrWhiteSpace(doc.OcrText) ? string.Empty
             : doc.OcrText.Length > 500 ? doc.OcrText[..500] : doc.OcrText;
 
@@ -61,8 +58,6 @@ public class FeedbackController : ControllerBase
             CreatedAt = DateTime.UtcNow
         });
 
-        // 3. Whitelist sender permanently
-        // Use resolved Sender.DisplayName first, fall back to request param
         var senderIdentifier = !string.IsNullOrWhiteSpace(doc.Sender?.DisplayName)
             ? doc.Sender.DisplayName.Trim()
             : !string.IsNullOrWhiteSpace(request.SenderIdentifier)
@@ -93,25 +88,21 @@ public class FeedbackController : ControllerBase
         return Ok(new
         {
             message = "Document moved to Inbox. Sender whitelisted.",
-            senderWhitelisted = senderWhitelisted,
+            senderWhitelisted,
             senderIdentifier = senderIdentifier ?? "unknown"
         });
     }
 
     /// <summary>
     /// POST /api/feedback/not-promotion
-    /// Called when admin clicks "This is real mail" on a promotion-classified document.
-    /// Promotion is CONTENT-based — no sender whitelisting.
     /// </summary>
     [HttpPost("not-promotion")]
     public async Task<IActionResult> MarkNotPromotion([FromBody] FeedbackRequest request)
     {
-        if (!_tenant.IsResolved)
-            return Unauthorized();
+        if (!_tenant.IsResolved) return Unauthorized();
 
         var doc = await _documents.GetByIdAsync(request.DocumentId, _tenant.TenantId);
-        if (doc is null)
-            return NotFound();
+        if (doc is null) return NotFound();
 
         await _documents.UpdateStatusAsync(request.DocumentId, 1);
 
@@ -129,10 +120,41 @@ public class FeedbackController : ControllerBase
             CreatedAt = DateTime.UtcNow
         });
 
-        return Ok(new
+        return Ok(new { message = "Document moved to Inbox. AI will learn from this correction." });
+    }
+
+    /// <summary>
+    /// POST /api/feedback/not-check
+    /// Called when admin clicks "Not a Check" on a document incorrectly flagged as a check.
+    /// Removes the check record and saves feedback so the AI learns to be stricter.
+    /// </summary>
+    [HttpPost("not-check")]
+    public async Task<IActionResult> MarkNotCheck([FromBody] FeedbackRequest request)
+    {
+        if (!_tenant.IsResolved) return Unauthorized();
+
+        var doc = await _documents.GetByIdAsync(request.DocumentId, _tenant.TenantId);
+        if (doc is null) return NotFound();
+
+        // Remove the check record
+        await _checks.DeleteByDocumentIdAsync(request.DocumentId);
+
+        // Save feedback so AI learns — snippet helps AI recognise this document type
+        var snippet = string.IsNullOrWhiteSpace(doc.OcrText) ? string.Empty
+            : doc.OcrText.Length > 300 ? doc.OcrText[..300] : doc.OcrText;
+
+        await _feedback.AddAsync(new DocumentFeedback
         {
-            message = "Document moved to Inbox. AI will learn from this correction."
+            DocumentFeedbackId = Guid.NewGuid(),
+            TenantId = _tenant.TenantId,
+            DocumentId = request.DocumentId,
+            AiClassification = "check",
+            CorrectedClassification = "not_check",
+            DocumentSnippet = snippet,
+            CreatedAt = DateTime.UtcNow
         });
+
+        return Ok(new { message = "Check removed. AI will learn from this correction." });
     }
 }
 

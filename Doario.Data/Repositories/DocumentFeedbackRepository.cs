@@ -15,7 +15,6 @@ public class DocumentFeedbackRepository : IDocumentFeedbackRepository
         await _db.SaveChangesAsync();
     }
 
-
     public async Task<List<DocumentFeedback>> GetAssignmentCorrectionsAsync(Guid tenantId, string ocrText)
     {
         var topText = ocrText.Length > 200 ? ocrText[..200] : ocrText;
@@ -28,7 +27,7 @@ public class DocumentFeedbackRepository : IDocumentFeedbackRepository
             .ToList();
 
         var all = await _db.DocumentFeedbacks
-            .Where(f => f.TenantId == tenantId && f.FeedbackTypeId == 2) // 2 = AssignmentCorrection
+            .Where(f => f.TenantId == tenantId && f.FeedbackTypeId == 2)
             .OrderByDescending(f => f.CreatedAt)
             .ToListAsync();
 
@@ -40,11 +39,6 @@ public class DocumentFeedbackRepository : IDocumentFeedbackRepository
             .ToList();
     }
 
-
-    /// <summary>
-    /// Returns last 10 corrections for this tenant globally.
-    /// General baseline — not sender-specific.
-    /// </summary>
     public async Task<List<DocumentFeedback>> GetRecentForTenantAsync(Guid tenantId, int count = 10)
         => await _db.DocumentFeedbacks
             .Where(f => f.TenantId == tenantId)
@@ -52,24 +46,8 @@ public class DocumentFeedbackRepository : IDocumentFeedbackRepository
             .Take(count)
             .ToListAsync();
 
-    /// <summary>
-    /// Returns corrections where the DocumentSnippet contains words
-    /// that also appear in the current document's OCR text.
-    ///
-    /// How it works:
-    /// 1. Extract significant words from the first 200 chars of the current OCR text
-    ///    (words 4+ characters long, skip common filler words)
-    /// 2. Load all corrections for this tenant
-    /// 3. Return ones where any keyword appears in their stored snippet
-    ///
-    /// This means: if MedLine Supply Co. was corrected before, and the current
-    /// document contains "MedLine" anywhere, that correction will be included
-    /// regardless of how many other corrections exist.
-    /// </summary>
     public async Task<List<DocumentFeedback>> GetRelevantForSenderAsync(Guid tenantId, string ocrText)
     {
-        // Extract keywords from the first 200 characters of the current document
-        // (sender name and company name usually appear near the top)
         var topText = ocrText.Length > 200 ? ocrText[..200] : ocrText;
         var keywords = topText
             .Split(new[] { ' ', '\n', '\r', ',', '.', '\t' }, StringSplitOptions.RemoveEmptyEntries)
@@ -80,21 +58,32 @@ public class DocumentFeedbackRepository : IDocumentFeedbackRepository
                         .Contains(w.ToLowerInvariant()))
             .Select(w => w.ToLowerInvariant())
             .Distinct()
-            .Take(10) // use top 10 keywords only
+            .Take(10)
             .ToList();
 
         if (!keywords.Any()) return new List<DocumentFeedback>();
 
-        // Load all corrections for this tenant (no limit — we want all sender-specific ones)
         var all = await _db.DocumentFeedbacks
             .Where(f => f.TenantId == tenantId)
             .OrderByDescending(f => f.CreatedAt)
             .ToListAsync();
 
-        // Return corrections where any keyword matches the stored snippet
         return all
             .Where(f => !string.IsNullOrWhiteSpace(f.DocumentSnippet) &&
                         keywords.Any(k => f.DocumentSnippet.ToLowerInvariant().Contains(k)))
             .ToList();
     }
+
+    /// <summary>
+    /// Returns the most recent "not a check" corrections for this tenant.
+    /// Used to teach AI what NOT to flag as a physical paper check.
+    /// </summary>
+    public async Task<List<DocumentFeedback>> GetNotCheckCorrectionsAsync(Guid tenantId, int count = 10)
+        => await _db.DocumentFeedbacks
+            .Where(f => f.TenantId == tenantId
+                     && f.AiClassification == "check"
+                     && f.CorrectedClassification == "not_check")
+            .OrderByDescending(f => f.CreatedAt)
+            .Take(count)
+            .ToListAsync();
 }

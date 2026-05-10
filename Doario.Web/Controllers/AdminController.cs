@@ -83,7 +83,6 @@ public class AdminController : ControllerBase
     }
 
     // GET /api/admin/queue
-    // Direct DB projection — no Include, no navigation property loading
     [HttpGet("queue")]
     public async Task<IActionResult> GetQueue(int page = 1, int pageSize = 50, string statusIds = null)
     {
@@ -101,7 +100,6 @@ public class AdminController : ControllerBase
                 .ToArray();
         }
 
-        // Project directly in SQL — no entity loading, no navigation joins
         var docs = await _db.Documents
             .Where(d => d.TenantId == tenantId)
             .Where(d => ids == null || ids.Contains(d.DocumentStatusId))
@@ -112,6 +110,7 @@ public class AdminController : ControllerBase
             {
                 d.DocumentId,
                 d.UploadedAt,
+                d.FetchedAt,
                 StatusId = d.DocumentStatusId,
                 StatusName = d.DocumentStatus.Name,
                 d.OriginalFileName,
@@ -119,10 +118,10 @@ public class AdminController : ControllerBase
                 SenderDisplayName = d.Sender != null ? d.Sender.DisplayName : string.Empty,
                 SenderEmail = d.Sender != null ? d.Sender.Email : string.Empty,
                 d.AiSummary,
+                d.SourceTypeId,
             })
             .ToListAsync();
 
-        // Scoped queries — only for documents in this page
         var docIds = docs.Select(d => d.DocumentId).ToList();
         var viewedIds = await _viewed.GetViewedDocumentIdsAsync(tenantId, docIds);
         var checkIds = await _checkRepo.GetDocumentIdsWithChecksAsync(tenantId);
@@ -131,8 +130,7 @@ public class AdminController : ControllerBase
         {
             var snippet = string.IsNullOrEmpty(d.AiSummary)
                 ? null
-                : Regex.Replace(d.AiSummary, "<[^>]*>", " ")
-                    .Replace("  ", " ").Trim();
+                : Regex.Replace(d.AiSummary, "<[^>]*>", " ").Replace("  ", " ").Trim();
             if (snippet != null && snippet.Length > 100)
                 snippet = snippet.Substring(0, 100);
 
@@ -140,12 +138,14 @@ public class AdminController : ControllerBase
             {
                 d.DocumentId,
                 d.UploadedAt,
+                d.FetchedAt,
                 d.StatusId,
                 d.StatusName,
                 d.OriginalFileName,
                 d.SharePointUrl,
                 d.SenderDisplayName,
                 d.SenderEmail,
+                d.SourceTypeId,
                 IsViewed = viewedIds.Contains(d.DocumentId),
                 IsCheck = checkIds.Contains(d.DocumentId),
                 AiSummarySnippet = snippet,
@@ -161,7 +161,12 @@ public class AdminController : ControllerBase
     {
         if (!_tenant.IsResolved) return Unauthorized();
 
-        var doc = await _documents.GetByIdWithTenantAsync(documentId, _tenant.TenantId);
+        var doc = await _db.Documents
+            .Include(d => d.DocumentStatus)
+            .Include(d => d.Sender)
+            .Include(d => d.MonitoredInbox)
+            .FirstOrDefaultAsync(d => d.DocumentId == documentId && d.TenantId == _tenant.TenantId);
+
         if (doc is null) return NotFound();
 
         var checkDocIds = await _checkRepo.GetDocumentIdsWithChecksAsync(_tenant.TenantId);
@@ -170,6 +175,7 @@ public class AdminController : ControllerBase
         {
             doc.DocumentId,
             doc.UploadedAt,
+            doc.FetchedAt,
             doc.OcrText,
             doc.AiSummary,
             StatusId = doc.DocumentStatusId,
@@ -179,6 +185,8 @@ public class AdminController : ControllerBase
             SenderDisplayName = doc.Sender != null ? doc.Sender.DisplayName : string.Empty,
             SenderEmail = doc.Sender != null ? doc.Sender.Email : string.Empty,
             IsCheck = checkDocIds.Contains(doc.DocumentId),
+            MonitoredInboxEmail = doc.MonitoredInbox != null ? doc.MonitoredInbox.EmailAddress : null,
+            SourceTypeId = doc.SourceTypeId,
         });
     }
 
@@ -230,15 +238,8 @@ public class AdminController : ControllerBase
     public async Task<IActionResult> GetSenders()
     {
         if (!_tenant.IsResolved) return Unauthorized();
-
         var senders = await _documents.GetDistinctSendersAsync(_tenant.TenantId);
-
-        return Ok(senders.Select(s => new
-        {
-            s.DisplayName,
-            s.Email,
-            s.DocumentCount
-        }));
+        return Ok(senders.Select(s => new { s.DisplayName, s.Email, s.DocumentCount }));
     }
 
     // GET /api/admin/by-sender
@@ -246,7 +247,6 @@ public class AdminController : ControllerBase
     public async Task<IActionResult> GetBySender([FromQuery] string q)
     {
         if (!_tenant.IsResolved) return Unauthorized();
-
         if (string.IsNullOrWhiteSpace(q))
             return BadRequest(new { error = "Search term is required." });
 
@@ -374,10 +374,8 @@ public class AdminController : ControllerBase
     public async Task<IActionResult> RequeueStuck([FromServices] AiProcessingQueue aiQueue)
     {
         if (!_tenant.IsResolved) return Unauthorized();
-
         var stuck = await _documents.GetStuckDocumentsAsync(_tenant.TenantId);
         aiQueue.EnqueueBatch(stuck.Select(d => d.DocumentId));
-
         return Ok(new
         {
             message = $"Requeued {stuck.Count} documents for AI processing.",

@@ -40,8 +40,6 @@ namespace Doario.Data.Models.Mail
 
         /// <summary>
         /// AI confidence score for sender identification 0.00-1.00.
-        /// Separate from DocumentAssignment.AIConfidence which tracks
-        /// staff assignment confidence.
         /// </summary>
         public decimal SenderMatchConfidence { get; set; }
 
@@ -51,36 +49,40 @@ namespace Doario.Data.Models.Mail
         /// </summary>
         public string AiSummary { get; set; }
 
+        /// <summary>
+        /// For email/fax sources: the time the email was received in the mailbox.
+        /// For scanner: the time the document was uploaded.
+        /// </summary>
         public DateTime UploadedAt { get; set; } = DateTime.UtcNow;
+
+        /// <summary>
+        /// The time Doario fetched and processed this document from the monitored inbox.
+        /// Null for scanner documents.
+        /// </summary>
+        public DateTime? FetchedAt { get; set; }
 
         [Required, MaxLength(500)]
         public string OriginalFileName { get; set; }
 
         /// <summary>
         /// Source of this document — 10=Fax, 11=Email, 12=Scanner etc.
-        /// See SourceType lookup table.
         /// </summary>
-        public int SourceTypeId { get; set; } = 12; // Default Scanner
+        public int SourceTypeId { get; set; } = 12;
 
         public SourceType SourceType { get; set; }
 
         /// <summary>
-        /// Groups pages that were scanned together in one batch.
-        /// All documents split from the same scan share the same BatchScanId.
-        /// Null for documents uploaded individually.
+        /// Groups pages scanned together in one batch.
         /// </summary>
         public Guid? BatchScanId { get; set; }
-
-        /// <summary>
-        /// First page of this document within the original batch scan.
-        /// e.g. if this document was pages 3-5 of a 20 page scan, BatchPageStart = 3.
-        /// </summary>
         public int? BatchPageStart { get; set; }
+        public int? BatchPageEnd { get; set; }
 
         /// <summary>
-        /// Last page of this document within the original batch scan.
-        /// e.g. if this document was pages 3-5 of a 20 page scan, BatchPageEnd = 5.
+        /// The monitored inbox this document was fetched from.
+        /// Null for scanner documents.
         /// </summary>
-        public int? BatchPageEnd { get; set; }
+        public Guid? MonitoredInboxId { get; set; }
+        public TenantMonitoredInbox MonitoredInbox { get; set; }
     }
 }

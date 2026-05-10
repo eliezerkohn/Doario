@@ -4,6 +4,7 @@ using Doario.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Doario.Data.Migrations
 {
     [DbContext(typeof(DoarioDataContext))]
-    partial class DoarioDataContextModelSnapshot : ModelSnapshot
+    [Migration("20260510192648_fetchTime")]
+    partial class fetchTime
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -678,9 +681,6 @@ namespace Doario.Data.Migrations
 
                     b.Property<int>("DocumentStatusId")
                         .HasColumnType("int");
-
-                    b.Property<DateTime?>("FetchedAt")
-                        .HasColumnType("datetime2");
 
                     b.Property<Guid?>("MonitoredInboxId")
                         .HasColumnType("uniqueidentifier");
@@ -1420,9 +1420,6 @@ namespace Doario.Data.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
 
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("datetime2");
-
                     b.Property<string>("Description")
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
@@ -1470,7 +1467,6 @@ namespace Doario.Data.Migrations
                         new
                         {
                             SubscriptionPlanId = new Guid("b1000000-0001-0001-0001-000000000001"),
-                            CreatedAt = new DateTime(2026, 5, 10, 21, 34, 11, 201, DateTimeKind.Utc).AddTicks(9105),
                             Description = "Perfect for small offices with low mail volume.",
                             EndDate = new DateTime(9999, 12, 31, 0, 0, 0, 0, DateTimeKind.Utc),
                             ExtraDocumentPrice = 1.00m,
@@ -1486,7 +1482,6 @@ namespace Doario.Data.Migrations
                         new
                         {
                             SubscriptionPlanId = new Guid("b1000000-0002-0002-0002-000000000002"),
-                            CreatedAt = new DateTime(2026, 5, 10, 21, 34, 11, 202, DateTimeKind.Utc).AddTicks(759),
                             Description = "For growing teams handling moderate mail volume.",
                             EndDate = new DateTime(9999, 12, 31, 0, 0, 0, 0, DateTimeKind.Utc),
                             ExtraDocumentPrice = 0.70m,
@@ -1502,7 +1497,6 @@ namespace Doario.Data.Migrations
                         new
                         {
                             SubscriptionPlanId = new Guid("b1000000-0003-0003-0003-000000000003"),
-                            CreatedAt = new DateTime(2026, 5, 10, 21, 34, 11, 202, DateTimeKind.Utc).AddTicks(768),
                             Description = "For high-volume mail rooms processing hundreds of documents.",
                             EndDate = new DateTime(9999, 12, 31, 0, 0, 0, 0, DateTimeKind.Utc),
                             ExtraDocumentPrice = 0.50m,
@@ -1931,17 +1925,42 @@ namespace Doario.Data.Migrations
                         .HasPrecision(5, 2)
                         .HasColumnType("decimal(5,2)");
 
+                    b.Property<int>("DocsPerStaff")
+                        .HasColumnType("int");
+
                     b.Property<DateTime>("EndDate")
                         .HasColumnType("datetime2");
+
+                    b.Property<decimal>("ExtraDocumentPrice")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<int>("IncludedDocuments")
+                        .HasColumnType("int");
+
+                    b.Property<decimal>("MonthlyPrice")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<string>("PlanName")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<decimal>("PricePerStaff")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
 
                     b.Property<DateTime>("StartDate")
                         .HasColumnType("datetime2");
 
                     b.Property<string>("StripePlanId")
+                        .IsRequired()
                         .HasMaxLength(100)
                         .HasColumnType("nvarchar(100)");
 
                     b.Property<string>("StripeSubscriptionId")
+                        .IsRequired()
                         .HasMaxLength(100)
                         .HasColumnType("nvarchar(100)");
 
@@ -1949,7 +1968,7 @@ namespace Doario.Data.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("nvarchar(100)");
 
-                    b.Property<Guid>("SubscriptionPlanId")
+                    b.Property<Guid?>("SubscriptionPlanId")
                         .HasColumnType("uniqueidentifier");
 
                     b.Property<Guid>("TenantId")
@@ -2483,10 +2502,9 @@ namespace Doario.Data.Migrations
             modelBuilder.Entity("Doario.Data.Models.SaaS.TenantSubscription", b =>
                 {
                     b.HasOne("Doario.Data.Models.SaaS.SubscriptionPlan", "SubscriptionPlan")
-                        .WithMany("Subscriptions")
+                        .WithMany()
                         .HasForeignKey("SubscriptionPlanId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.HasOne("Doario.Data.Models.SaaS.Tenant", "Tenant")
                         .WithMany("Subscriptions")
@@ -2502,11 +2520,6 @@ namespace Doario.Data.Migrations
             modelBuilder.Entity("Doario.Data.Models.SaaS.PromoCode", b =>
                 {
                     b.Navigation("Redemptions");
-                });
-
-            modelBuilder.Entity("Doario.Data.Models.SaaS.SubscriptionPlan", b =>
-                {
-                    b.Navigation("Subscriptions");
                 });
 
             modelBuilder.Entity("Doario.Data.Models.SaaS.Tenant", b =>

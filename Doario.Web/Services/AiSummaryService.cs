@@ -3,6 +3,7 @@ using Azure.AI.OpenAI;
 using OpenAI.Chat;
 using Doario.Data.Models.Mail;
 using Doario.Data.Repositories;
+using System.Text.RegularExpressions;
 
 namespace Doario.Web.Services;
 
@@ -10,6 +11,11 @@ public class AiSummaryService
 {
     private readonly IConfiguration _config;
     private readonly IServiceScopeFactory _scopeFactory;
+
+    // Valid email regex — rejects URLs, payment portals, web addresses
+    private static readonly Regex ValidEmailRegex = new(
+        @"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$",
+        RegexOptions.Compiled);
 
     public AiSummaryService(IConfiguration config, IServiceScopeFactory scopeFactory)
     {
@@ -46,6 +52,16 @@ public class AiSummaryService
             // -- Step 2: Load active extraction fields --
             var extractionFields = await extractionFieldRepo.GetActiveFieldsAsync(doc.TenantId);
 
+            const string checkDetectionPrompt =
+                "Detect if this document is a PHYSICAL PAPER CHECK (cheque). " +
+                "A physical check has ALL of these features: a printed check number, a bank routing number, " +
+                "an account number, a payee line (Pay to the order of), and a signature line. " +
+                "Financial statements, invoices, remittance advice, tax forms (1099, W-2, etc.), " +
+                "insurance documents, medical bills, and any document that merely mentions a dollar amount " +
+                "are NOT checks. If and ONLY IF all check features are present, extract: " +
+                "amount (numbers only, no currency symbol), payer name, check number. " +
+                "If there is any doubt, return no for IS_CHECK and UNKNOWN for the rest.";
+
             var extractionFieldsBlock = string.Empty;
             if (extractionFields.Any())
             {
@@ -57,18 +73,14 @@ public class AiSummaryService
                 extractionFieldsBlock =
                     "\n\nSTEP 6 - Extract the following custom fields if present in the document. " +
                     "For each field found, add it to the SUMMARY Key Details section in the format [FieldName]: [value]. " +
-                    "If a field is not found, do not mention it.\n" +
+                    "If a field is NOT found in the document, do NOT mention it at all — do not write UNKNOWN, do not write the field name. " +
+                    "Only include fields that have a real value.\n" +
                     string.Join("\n", fieldLines) +
-                    "\n\nSTEP 7 - Detect if this document is a physical check (cheque). " +
-                    "If it is a check, extract: amount (numbers only, no currency symbol), payer name, check number. " +
-                    "If it is not a check, return no for IS_CHECK and UNKNOWN for the rest.";
+                    "\n\nSTEP 7 - " + checkDetectionPrompt;
             }
             else
             {
-                extractionFieldsBlock =
-                    "\n\nSTEP 6 - Detect if this document is a physical check (cheque). " +
-                    "If it is a check, extract: amount (numbers only, no currency symbol), payer name, check number. " +
-                    "If it is not a check, return no for IS_CHECK and UNKNOWN for the rest.";
+                extractionFieldsBlock = "\n\nSTEP 6 - " + checkDetectionPrompt;
             }
 
             // -- Step 3: Load AI assignment config and active staff --
@@ -85,9 +97,7 @@ public class AiSummaryService
 
                 if (activeStaff.Any())
                 {
-                    var staffLines = activeStaff.Select(s =>
-                        "- " + s.Email + ": " + s.FirstName + " " + s.LastName);
-
+                    var staffLines = activeStaff.Select(s => "- " + s.Email + ": " + s.FirstName + " " + s.LastName);
                     var correctionLines = string.Empty;
                     if (assignmentCorrections.Any())
                     {
@@ -101,22 +111,18 @@ public class AiSummaryService
                         });
                         correctionLines = "\n\nASSIGNMENT LEARNING - apply these:\n" + string.Join("\n", cLines);
                     }
-
                     assignmentBlock =
                         "\n\nSTEP ASSIGNMENT - Based on the document content, suggest which staff member " +
                         "should handle this document. Choose from this list:\n" +
-                        string.Join("\n", staffLines) +
-                        correctionLines +
+                        string.Join("\n", staffLines) + correctionLines +
                         "\nIf you cannot determine who should handle it, return UNKNOWN.";
                 }
             }
 
             // -- Step 4: Load corrections --
-            var senderCorrections = await feedbackRepo.GetRelevantForSenderAsync(
-                doc.TenantId, doc.OcrText);
-
-            var recentCorrections = await feedbackRepo.GetRecentForTenantAsync(
-                doc.TenantId, 5);
+            var senderCorrections = await feedbackRepo.GetRelevantForSenderAsync(doc.TenantId, doc.OcrText);
+            var recentCorrections = await feedbackRepo.GetRecentForTenantAsync(doc.TenantId, 5);
+            var notCheckCorrections = await feedbackRepo.GetNotCheckCorrectionsAsync(doc.TenantId);
 
             var allCorrections = senderCorrections
                 .Concat(recentCorrections)
@@ -124,36 +130,37 @@ public class AiSummaryService
                 .Select(g => g.First())
                 .ToList();
 
-            string correctionExamples;
+            string correctionExamples = string.Empty;
             if (allCorrections.Any())
             {
                 var lines = new List<string>();
-
                 foreach (var c in senderCorrections.Take(5))
                 {
                     var snippet = c.DocumentSnippet?[..Math.Min(120, c.DocumentSnippet?.Length ?? 0)];
-                    lines.Add($"- IMPORTANT: A document from this same sender " +
-                              $"(starting with \"{snippet}\") was previously classified as " +
-                              $"\"{c.AiClassification}\" but the admin confirmed it is " +
-                              $"\"{c.CorrectedClassification}\". Apply this correction.");
+                    lines.Add($"- IMPORTANT: A document from this same sender (starting with \"{snippet}\") " +
+                              $"was previously classified as \"{c.AiClassification}\" but the admin confirmed " +
+                              $"it is \"{c.CorrectedClassification}\". Apply this correction.");
                 }
-
                 foreach (var c in recentCorrections
                     .Where(r => !senderCorrections.Any(s => s.DocumentFeedbackId == r.DocumentFeedbackId))
                     .Take(5))
                 {
                     var snippet = c.DocumentSnippet?[..Math.Min(100, c.DocumentSnippet?.Length ?? 0)];
                     lines.Add($"- A document starting with \"{snippet}\" was incorrectly " +
-                              $"classified as \"{c.AiClassification}\" but is actually " +
-                              $"\"{c.CorrectedClassification}\".");
+                              $"classified as \"{c.AiClassification}\" but is actually \"{c.CorrectedClassification}\".");
                 }
-
-                correctionExamples = "\n\nLEARNING FROM PAST CORRECTIONS - apply these:\n" +
-                                     string.Join("\n", lines);
+                correctionExamples = "\n\nLEARNING FROM PAST CORRECTIONS - apply these:\n" + string.Join("\n", lines);
             }
-            else
+
+            var notCheckBlock = string.Empty;
+            if (notCheckCorrections.Any())
             {
-                correctionExamples = string.Empty;
+                var ncLines = notCheckCorrections.Take(5).Select(c =>
+                {
+                    var snippet = c.DocumentSnippet?[..Math.Min(120, c.DocumentSnippet?.Length ?? 0)];
+                    return $"- A document starting with \"{snippet}\" was incorrectly flagged as a check. It is NOT a check.";
+                });
+                notCheckBlock = "\n\nCHECK DETECTION LEARNING - these were NOT checks:\n" + string.Join("\n", ncLines);
             }
 
             // -- Step 5: Call Azure OpenAI --
@@ -174,21 +181,26 @@ public class AiSummaryService
                     {correctionExamples}
 
                     STEP 2 - Rate your confidence in this classification from 1 to 10.
-                    10 = absolutely certain. 1 = complete guess.
-                    Be conservative - if there is any doubt, score lower.
 
                     STEP 3 - Extract the sender's full name or company name.
-                    Use the most specific name available (e.g. "Dr. Sarah Jones" over "Jones Medical").
+                    Use the most specific name available.
                     If no sender name is found, write UNKNOWN.
 
-                    STEP 4 - Extract the sender's email address.
-                    Only include a real email address found in the document.
-                    If no email address is present, write UNKNOWN.
+                    STEP 4 - Extract the sender's genuine contact email address.
+                    Only include a real person or company email address in the format name@domain.com.
+                    Do NOT extract payment portal addresses, website URLs, QR code addresses, or web addresses.
+                    Do NOT extract addresses from "pay at", "visit", "log in at", or "go to" instructions.
+                    Do NOT extract anything that is not a standard email address with a proper @ symbol and domain.
+                    If no genuine contact email address is present, write UNKNOWN.
 
-                    STEP 5 - Write a structured summary on a SINGLE LINE (no line breaks) using EXACTLY
-                    this format for ALL categories including spam and promotion:
-                    <strong>Document Type:</strong> [type] <strong>Sender:</strong> [name or company] <strong>Purpose:</strong> [main subject] <strong>Action Required:</strong> [action or None] <strong>Key Details:</strong> [relevant details or None]
-                    {extractionFieldsBlock}{assignmentBlock}
+                    STEP 5 - Write a structured summary on a SINGLE LINE using EXACTLY this format:
+                    <strong>Sender:</strong> [name or company] <strong>Purpose:</strong> [main subject] <strong>Action Required:</strong> [action or None] <strong>Key Details:</strong> [relevant details or None]
+
+                    STEP NAME - Generate a short meaningful filename for this document (no extension, no spaces, use underscores).
+                    The name should describe what the document is, who it is from, and if applicable the year or reference number.
+                    Examples: ShelterPoint_1099MISC_2025, NYP_PatientSummary_Kohn, DEA_InspectionNotice_2026
+                    Maximum 50 characters. No special characters except underscores.
+                    {extractionFieldsBlock}{notCheckBlock}{assignmentBlock}
 
                     Return ONLY these lines, nothing else:
                     CATEGORY: [mail|promotion|spam]
@@ -196,6 +208,7 @@ public class AiSummaryService
                     FROM_NAME: [sender full name or company, or UNKNOWN]
                     FROM_EMAIL: [sender email address, or UNKNOWN]
                     SUMMARY: [your single-line summary here]
+                    DOCUMENT_NAME: [meaningful filename without extension]
                     IS_CHECK: [yes|no]
                     CHECK_AMOUNT: [amount numbers only, or UNKNOWN]
                     CHECK_PAYER: [payer name, or UNKNOWN]
@@ -216,6 +229,7 @@ public class AiSummaryService
             var summary = string.Empty;
             var fromName = string.Empty;
             var fromEmail = string.Empty;
+            var documentName = string.Empty;
             var isCheck = false;
             var checkAmount = string.Empty;
             var checkPayer = string.Empty;
@@ -233,17 +247,20 @@ public class AiSummaryService
                 else if (trimmed.StartsWith("FROM_NAME:", StringComparison.OrdinalIgnoreCase))
                 {
                     var val = trimmed.Substring(10).Trim();
-                    fromName = val.Equals("UNKNOWN", StringComparison.OrdinalIgnoreCase)
-                        ? string.Empty : val;
+                    fromName = val.Equals("UNKNOWN", StringComparison.OrdinalIgnoreCase) ? string.Empty : val;
                 }
                 else if (trimmed.StartsWith("FROM_EMAIL:", StringComparison.OrdinalIgnoreCase))
                 {
                     var val = trimmed.Substring(11).Trim();
-                    fromEmail = val.Equals("UNKNOWN", StringComparison.OrdinalIgnoreCase)
-                        ? string.Empty : val;
+                    fromEmail = val.Equals("UNKNOWN", StringComparison.OrdinalIgnoreCase) ? string.Empty : val;
                 }
                 else if (trimmed.StartsWith("SUMMARY:", StringComparison.OrdinalIgnoreCase))
                     summary = trimmed.Substring(8).Trim();
+                else if (trimmed.StartsWith("DOCUMENT_NAME:", StringComparison.OrdinalIgnoreCase))
+                {
+                    var val = trimmed.Substring(14).Trim();
+                    documentName = val.Equals("UNKNOWN", StringComparison.OrdinalIgnoreCase) ? string.Empty : val;
+                }
                 else if (trimmed.StartsWith("IS_CHECK:", StringComparison.OrdinalIgnoreCase))
                     isCheck = trimmed.Substring(9).Trim().Equals("yes", StringComparison.OrdinalIgnoreCase);
                 else if (trimmed.StartsWith("CHECK_AMOUNT:", StringComparison.OrdinalIgnoreCase))
@@ -270,23 +287,51 @@ public class AiSummaryService
                     int.TryParse(trimmed.Substring(22).Trim(), out assignmentConfidence);
             }
 
-            if (string.IsNullOrWhiteSpace(summary))
-                summary = raw;
+            if (string.IsNullOrWhiteSpace(summary)) summary = raw;
 
-            // -- Step 7: Format summary --
+            // -- Step 7: Validate extracted email --
+            // Reject payment portals, URLs, and anything that isn't a real email address
+            if (!string.IsNullOrWhiteSpace(fromEmail) && !ValidEmailRegex.IsMatch(fromEmail))
+            {
+                _logger.LogDebug(
+                    "AiSummaryService: rejected invalid/non-contact email '{Email}' for document {Id}",
+                    fromEmail, documentId);
+                fromEmail = string.Empty;
+            }
+
+            // -- Step 8: Strip UNKNOWN fields from summary --
+            summary = Regex.Replace(summary, @",?\s*[\w\s\-/]+:\s*UNKNOWN\b", "", RegexOptions.IgnoreCase).Trim();
+            summary = Regex.Replace(summary, @",\s*$", "").Trim();
+            summary = Regex.Replace(summary, @"\s{2,}", " ").Trim();
+
+            // -- Step 9: Format summary --
             var html = summary
                 .Replace("<strong>Sender:", "<br><strong>Sender:")
                 .Replace("<strong>Purpose:", "<br><strong>Purpose:")
                 .Replace("<strong>Action Required:", "<br><strong>Action Required:")
                 .Replace("<strong>Key Details:", "<br><strong>Key Details:");
 
+            // Remove leading <br> if present
+            if (html.StartsWith("<br>", StringComparison.OrdinalIgnoreCase))
+                html = html.Substring(4).TrimStart();
+
             await documents.UpdateAiSummaryAsync(documentId, html);
 
-            // -- Step 8: Resolve sender to Sender table --
-            await senderResolution.ResolveAsync(
-                documentId, doc.TenantId, fromName, fromEmail);
+            // -- Step 10: Update filename with AI-generated meaningful name --
+            if (!string.IsNullOrWhiteSpace(documentName))
+            {
+                var cleanName = Regex.Replace(documentName, @"[^a-zA-Z0-9_]", "_");
+                cleanName = Regex.Replace(cleanName, @"_+", "_").Trim('_');
+                if (cleanName.Length > 50) cleanName = cleanName[..50];
+                var originalExt = Path.GetExtension(doc.OriginalFileName);
+                var newFileName = cleanName + (string.IsNullOrEmpty(originalExt) ? ".pdf" : originalExt);
+                await documents.UpdateFileNameAsync(documentId, newFileName);
+            }
 
-            // -- Step 9: Save check if detected --
+            // -- Step 11: Resolve sender --
+            await senderResolution.ResolveAsync(documentId, doc.TenantId, fromName, fromEmail);
+
+            // -- Step 12: Save check if detected --
             if (isCheck && !string.IsNullOrWhiteSpace(checkPayer))
             {
                 decimal.TryParse(checkAmount, out var parsedAmount);
@@ -300,7 +345,7 @@ public class AiSummaryService
                 });
             }
 
-            // -- Step 10: AI Assignment --
+            // -- Step 13: AI Assignment --
             if (!string.IsNullOrWhiteSpace(suggestedStaffEmail) && assignmentMode != "Off")
             {
                 await aiAssignmentService.ProcessAsync(
@@ -308,35 +353,14 @@ public class AiSummaryService
                     assignmentConfidence, assignmentMode, confidenceThreshold);
             }
 
-            // -- Step 11: Decide folder --
+            // -- Step 14: Decide folder --
             int statusId;
-
             if (isWhitelisted || category == "mail")
-            {
                 statusId = 1;
-                if (isWhitelisted)
-                    Console.WriteLine($"AiSummaryService: document {documentId} -- " +
-                                      "sender is whitelisted, forced to Unassigned.");
-            }
             else if (confidence >= 8)
-            {
-                statusId = category switch
-                {
-                    "spam" => 7,
-                    "promotion" => 8,
-                    _ => 1
-                };
-                Console.WriteLine($"AiSummaryService: document {documentId} -- " +
-                                  $"classified as {category} with confidence {confidence}, " +
-                                  $"moved to status {statusId}.");
-            }
+                statusId = category switch { "spam" => 7, "promotion" => 8, _ => 1 };
             else
-            {
                 statusId = 1;
-                Console.WriteLine($"AiSummaryService: document {documentId} -- " +
-                                  $"classified as {category} but confidence {confidence} " +
-                                  $"is below threshold 8, staying Unassigned.");
-            }
 
             if (statusId != 1)
                 await documents.UpdateStatusAsync(documentId, statusId);
@@ -346,4 +370,8 @@ public class AiSummaryService
             Console.WriteLine($"AiSummaryService error: {ex.Message}");
         }
     }
+
+    private ILogger<AiSummaryService> _logger =>
+        _scopeFactory.CreateScope().ServiceProvider
+            .GetRequiredService<ILogger<AiSummaryService>>();
 }

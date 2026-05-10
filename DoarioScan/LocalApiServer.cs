@@ -13,7 +13,6 @@ public class LocalApiServer
     private CancellationTokenSource _cts;
     private Task _serverTask;
 
-    // Scanner cache — avoids calling TWAIN on every request
     private List<string> _cachedScanners = new();
     private DateTime _cacheTime = DateTime.MinValue;
     private static readonly TimeSpan CacheDuration = TimeSpan.FromSeconds(30);
@@ -85,6 +84,9 @@ public class LocalApiServer
                 case "/upload": await HandleUpload(req, res); break;
                 case "/confirm": await HandleConfirm(req, res); break;
                 case "/rescan": await HandleRescan(req, res); break;
+                // New server-side batch confirm endpoints
+                case "/scan-confirm-batch": await HandleScanConfirmBatch(req, res); break;
+                case "/scan-confirm-status": await HandleScanConfirmStatus(req, res); break;
                 default: await WriteJson(res, 404, new { error = "Not found" }); break;
             }
         }
@@ -98,12 +100,8 @@ public class LocalApiServer
         }
     }
 
-    // ── Scanner cache helper ──────────────────────────────────────────────────
+    // ── Scanner cache ─────────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Returns cached scanner list.
-    /// Forces a fresh TWAIN scan if cache is stale or refresh=true is passed.
-    /// </summary>
     private List<string> GetScanners(bool forceRefresh = false)
     {
         lock (_cacheLock)
@@ -115,10 +113,7 @@ public class LocalApiServer
                     _cachedScanners = _scannerService.GetAvailableScanners();
                     _cacheTime = DateTime.UtcNow;
                 }
-                catch
-                {
-                    // If TWAIN fails keep old cache
-                }
+                catch { }
             }
             return _cachedScanners;
         }
@@ -130,8 +125,6 @@ public class LocalApiServer
     {
         var settings = _settingsService.Load();
         var isConfigured = _settingsService.IsConfigured(settings);
-
-        // Health check uses cache — no TWAIN call unless stale
         var scanners = GetScanners();
         var scannerReady = scanners.Contains(settings.SelectedScanner);
 
@@ -147,26 +140,15 @@ public class LocalApiServer
 
     private async Task HandleScanners(HttpListenerRequest req, HttpListenerResponse res)
     {
-        if (req.HttpMethod != "GET")
-        {
-            await WriteJson(res, 405, new { error = "Method not allowed" });
-            return;
-        }
-
-        // ?refresh=true forces a fresh TWAIN scan immediately
+        if (req.HttpMethod != "GET") { await WriteJson(res, 405, new { error = "Method not allowed" }); return; }
         var forceRefresh = req.QueryString["refresh"] == "true";
         var scanners = GetScanners(forceRefresh);
-
         await WriteJson(res, 200, new { scanners });
     }
 
     private async Task HandleScan(HttpListenerRequest req, HttpListenerResponse res)
     {
-        if (req.HttpMethod != "POST")
-        {
-            await WriteJson(res, 405, new { error = "Method not allowed" });
-            return;
-        }
+        if (req.HttpMethod != "POST") { await WriteJson(res, 405, new { error = "Method not allowed" }); return; }
 
         ScanRequest scanRequest;
         try
@@ -182,44 +164,44 @@ public class LocalApiServer
         catch { scanRequest = new ScanRequest(); }
 
         var response = await _scannerService.ScanAsync(scanRequest);
-        var statusCode = response.Success ? 200 : 500;
-        await WriteJson(res, statusCode, response);
+        await WriteJson(res, response.Success ? 200 : 500, response);
     }
 
     private async Task HandleUpload(HttpListenerRequest req, HttpListenerResponse res)
     {
-        if (req.HttpMethod != "POST")
-        {
-            await WriteJson(res, 405, new { error = "Method not allowed" });
-            return;
-        }
+        if (req.HttpMethod != "POST") { await WriteJson(res, 405, new { error = "Method not allowed" }); return; }
         await ForwardToBackend(req, res, "api/ingest/scan-batch");
     }
 
     private async Task HandleConfirm(HttpListenerRequest req, HttpListenerResponse res)
     {
-        if (req.HttpMethod != "POST")
-        {
-            await WriteJson(res, 405, new { error = "Method not allowed" });
-            return;
-        }
+        if (req.HttpMethod != "POST") { await WriteJson(res, 405, new { error = "Method not allowed" }); return; }
         await ForwardToBackend(req, res, "api/ingest/scan-confirm");
     }
 
     private async Task HandleRescan(HttpListenerRequest req, HttpListenerResponse res)
     {
-        if (req.HttpMethod != "POST")
-        {
-            await WriteJson(res, 405, new { error = "Method not allowed" });
-            return;
-        }
+        if (req.HttpMethod != "POST") { await WriteJson(res, 405, new { error = "Method not allowed" }); return; }
         await ForwardToBackend(req, res, "api/ingest/scan-replace");
     }
 
-    private async Task ForwardToBackend(
-        HttpListenerRequest req,
-        HttpListenerResponse res,
-        string backendPath)
+    // POST /scan-confirm-batch — starts server-side batch confirm, returns immediately
+    private async Task HandleScanConfirmBatch(HttpListenerRequest req, HttpListenerResponse res)
+    {
+        if (req.HttpMethod != "POST") { await WriteJson(res, 405, new { error = "Method not allowed" }); return; }
+        await ForwardToBackend(req, res, "api/ingest/scan-confirm-batch");
+    }
+
+    // GET /scan-confirm-status — poll for live per-document progress
+    private async Task HandleScanConfirmStatus(HttpListenerRequest req, HttpListenerResponse res)
+    {
+        if (req.HttpMethod != "GET") { await WriteJson(res, 405, new { error = "Method not allowed" }); return; }
+        await ForwardToBackendGet(res, "api/ingest/scan-confirm-status");
+    }
+
+    // ── Forward helpers ───────────────────────────────────────────────────────
+
+    private async Task ForwardToBackend(HttpListenerRequest req, HttpListenerResponse res, string backendPath)
     {
         var settings = _settingsService.Load();
 
@@ -261,6 +243,38 @@ public class LocalApiServer
         }
     }
 
+    private async Task ForwardToBackendGet(HttpListenerResponse res, string backendPath)
+    {
+        var settings = _settingsService.Load();
+
+        if (string.IsNullOrWhiteSpace(settings.ApiKey))
+        {
+            await WriteJson(res, 401, new { error = "API key not configured." });
+            return;
+        }
+
+        try
+        {
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+            client.DefaultRequestHeaders.Add("X-Api-Key", settings.ApiKey);
+
+            var response = await client.GetAsync(
+                $"{settings.ApiBaseUrl.TrimEnd('/')}/{backendPath}");
+
+            var responseBody = await response.Content.ReadAsStringAsync();
+            var bytes = Encoding.UTF8.GetBytes(responseBody);
+
+            res.StatusCode = (int)response.StatusCode;
+            res.ContentType = "application/json";
+            res.ContentLength64 = bytes.Length;
+            await res.OutputStream.WriteAsync(bytes);
+        }
+        catch (Exception ex)
+        {
+            await WriteJson(res, 500, new { error = ex.Message });
+        }
+    }
+
     private async Task WriteJson(HttpListenerResponse res, int statusCode, object data)
     {
         var json = JsonSerializer.Serialize(data, new JsonSerializerOptions
@@ -272,7 +286,6 @@ public class LocalApiServer
         res.StatusCode = statusCode;
         res.ContentType = "application/json";
         res.ContentLength64 = bytes.Length;
-
         await res.OutputStream.WriteAsync(bytes);
     }
 }

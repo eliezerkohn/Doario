@@ -4,8 +4,8 @@ namespace Doario.Web.Services;
 
 /// <summary>
 /// Singleton service that processes monitored inboxes in the background.
-/// Browser reloads don't affect processing — runs server-side until complete.
-/// Checks for duplicate filenames before saving to prevent double-processing.
+/// File naming: senderName_timestamp.ext (name first, timestamp after).
+/// AI will update the filename to a meaningful name after processing.
 /// </summary>
 public class ProcessInboxQueue
 {
@@ -84,36 +84,21 @@ public class ProcessInboxQueue
             try
             {
                 using var scope = _scopeFactory.CreateScope();
-                var monitoredInboxRepo = scope.ServiceProvider
-                    .GetRequiredService<ITenantMonitoredInboxRepository>();
-                var tenantRepo = scope.ServiceProvider
-                    .GetRequiredService<ITenantRepository>();
-                var graph = scope.ServiceProvider
-                    .GetRequiredService<Microsoft.Graph.GraphServiceClient>();
-                var documentRepo = scope.ServiceProvider
-                    .GetRequiredService<IDocumentRepository>();
-                var sharePointService = scope.ServiceProvider
-                    .GetRequiredService<SharePointService>();
-                var ocrService = scope.ServiceProvider
-                    .GetRequiredService<OcrService>();
-                var errorLogRepo = scope.ServiceProvider
-                    .GetRequiredService<IErrorLogRepository>();
+                var monitoredInboxRepo = scope.ServiceProvider.GetRequiredService<ITenantMonitoredInboxRepository>();
+                var tenantRepo = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
+                var graph = scope.ServiceProvider.GetRequiredService<Microsoft.Graph.GraphServiceClient>();
+                var documentRepo = scope.ServiceProvider.GetRequiredService<IDocumentRepository>();
+                var sharePointService = scope.ServiceProvider.GetRequiredService<SharePointService>();
+                var ocrService = scope.ServiceProvider.GetRequiredService<OcrService>();
+                var errorLogRepo = scope.ServiceProvider.GetRequiredService<IErrorLogRepository>();
 
                 var inbox = await monitoredInboxRepo.GetByIdAsync(status.InboxId);
-                if (inbox == null)
-                {
-                    SetState(status.InboxId, InboxJobState.Done, 0);
-                    continue;
-                }
+                if (inbox == null) { SetState(status.InboxId, InboxJobState.Done, 0); continue; }
 
                 var tenant = await tenantRepo.GetByIdAsync(inbox.TenantId);
-                if (tenant == null)
-                {
-                    SetState(status.InboxId, InboxJobState.Failed, error: "Tenant not found.");
-                    continue;
-                }
+                if (tenant == null) { SetState(status.InboxId, InboxJobState.Failed, error: "Tenant not found."); continue; }
 
-                var now = DateTime.UtcNow;
+                var fetchedAt = DateTime.UtcNow;
                 var filterDate = inbox.LastProcessedAt.ToString("yyyy-MM-ddTHH:mm:ssZ");
                 var filter = $"receivedDateTime ge {filterDate}";
 
@@ -124,10 +109,7 @@ public class ProcessInboxQueue
                     .GetAsync(req =>
                     {
                         req.QueryParameters.Filter = filter;
-                        req.QueryParameters.Select = new[]
-                        {
-                            "id", "subject", "from", "receivedDateTime", "hasAttachments"
-                        };
+                        req.QueryParameters.Select = new[] { "id", "subject", "from", "receivedDateTime", "hasAttachments" };
                         req.QueryParameters.Top = 50;
                     });
 
@@ -137,11 +119,7 @@ public class ProcessInboxQueue
                     var pageIterator = Microsoft.Graph.PageIterator<
                         Microsoft.Graph.Models.Message,
                         Microsoft.Graph.Models.MessageCollectionResponse>
-                        .CreatePageIterator(graph, firstPage, msg =>
-                        {
-                            allMessages.Add(msg);
-                            return true;
-                        });
+                        .CreatePageIterator(graph, firstPage, msg => { allMessages.Add(msg); return true; });
                     await pageIterator.IterateAsync();
                 }
 
@@ -170,19 +148,20 @@ public class ProcessInboxQueue
                             var contentBytes = fileAttachment.ContentBytes;
                             if (contentBytes == null || contentBytes.Length == 0) continue;
 
-                            var timestamp = (message.ReceivedDateTime ?? DateTimeOffset.UtcNow)
+                            var receivedTime = (message.ReceivedDateTime ?? DateTimeOffset.UtcNow)
                                 .ToString("yyyyMMdd_HHmmss");
                             var prefix = inbox.IsFaxInbox ? "fax" : "email";
-                            var fileName = $"{prefix}_{timestamp}_{fileAttachment.Name}";
+                            var baseName = SanitiseFileName(
+                                Path.GetFileNameWithoutExtension(fileAttachment.Name ?? "attachment"));
 
-                            // ── Duplicate check — skip if already saved ───────
-                            var alreadyExists = await documentRepo.ExistsByFileNameAsync(
-                                tenant.TenantId, fileName);
+                            // Format: baseName_timestamp.ext (name first, then time)
+                            var fileName = $"{baseName}_{receivedTime}{ext}";
+
+                            // Duplicate check
+                            var alreadyExists = await documentRepo.ExistsByFileNameAsync(tenant.TenantId, fileName);
                             if (alreadyExists)
                             {
-                                _logger.LogDebug(
-                                    "ProcessInboxQueue: skipping duplicate {FileName}",
-                                    fileName);
+                                _logger.LogDebug("ProcessInboxQueue: skipping duplicate {FileName}", fileName);
                                 continue;
                             }
 
@@ -202,34 +181,32 @@ public class ProcessInboxQueue
                                 UploadedByStaffId = tenant.SystemStaffId,
                                 SourceTypeId = sourceTypeId,
                                 UploadedAt = message.ReceivedDateTime?.UtcDateTime ?? DateTime.UtcNow,
+                                FetchedAt = fetchedAt,
+                                MonitoredInboxId = inbox.TenantMonitoredInboxId,
                             };
 
                             await documentRepo.CreateAsync(document);
                             ocrService.RunInBackground(document.DocumentId);
                             processed++;
-
                             SetState(status.InboxId, InboxJobState.Processing, processed);
                         }
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(ex,
-                            "ProcessInboxQueue: failed processing message {Id}", message.Id);
+                        _logger.LogError(ex, "ProcessInboxQueue: failed processing message {Id}", message.Id);
                     }
                 }
 
-                await monitoredInboxRepo.UpdateLastProcessedAtAsync(status.InboxId, now);
+                await monitoredInboxRepo.UpdateLastProcessedAtAsync(status.InboxId, fetchedAt);
                 DoarioBackgroundService.LastFetchCounts[status.InboxId] = processed;
                 SetState(status.InboxId, InboxJobState.Done, processed);
 
-                _logger.LogInformation(
-                    "ProcessInboxQueue: inbox {Email} done — {Count} documents",
+                _logger.LogInformation("ProcessInboxQueue: inbox {Email} done — {Count} documents",
                     inbox.EmailAddress, processed);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex,
-                    "ProcessInboxQueue: inbox {InboxId} failed", status.InboxId);
+                _logger.LogError(ex, "ProcessInboxQueue: inbox {InboxId} failed", status.InboxId);
                 SetState(status.InboxId, InboxJobState.Failed, error: ex.Message);
             }
         }
@@ -249,6 +226,16 @@ public class ProcessInboxQueue
             if (error != null) s.Error = error;
         }
     }
+
+    private static string SanitiseFileName(string input)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var clean = new string(input
+            .Where(c => !invalid.Contains(c) && c != ' ')
+            .Take(60)
+            .ToArray());
+        return string.IsNullOrWhiteSpace(clean) ? "document" : clean;
+    }
 }
 
 public class InboxJobStatus
@@ -260,13 +247,7 @@ public class InboxJobStatus
     public string Error { get; set; }
 }
 
-public enum InboxJobState
-{
-    Waiting,
-    Processing,
-    Done,
-    Failed
-}
+public enum InboxJobState { Waiting, Processing, Done, Failed }
 
 public class ProcessInboxJobResult
 {

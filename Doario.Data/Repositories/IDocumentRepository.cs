@@ -22,9 +22,14 @@ public interface IDocumentRepository
 
     /// <summary>
     /// Returns true if a document with this exact filename already exists for the tenant.
-    /// Used to prevent duplicate processing when multiple fetchers run concurrently.
+    /// Used to prevent duplicate processing when concurrent fetchers run.
     /// </summary>
     Task<bool> ExistsByFileNameAsync(Guid tenantId, string fileName);
+
+    /// <summary>
+    /// Updates the OriginalFileName after AI generates a meaningful name.
+    /// </summary>
+    Task UpdateFileNameAsync(Guid documentId, string fileName);
 
     Task SaveAsync();
 }

@@ -12,6 +12,15 @@ const formatFullDate = (dateStr) => {
     });
 };
 
+const formatShortDate = (dateStr) => {
+    if (!dateStr) return null;
+    const d = new Date(dateStr.endsWith('Z') ? dateStr : dateStr + 'Z');
+    return d.toLocaleDateString([], {
+        month: 'short', day: 'numeric', year: 'numeric',
+        hour: '2-digit', minute: '2-digit'
+    });
+};
+
 const statusLabel = (statusId) => ({
     1: { label: 'Unassigned', color: '#d97706', bg: '#fef3c7' },
     2: { label: 'Assigned', color: '#059669', bg: '#d1fae5' },
@@ -24,29 +33,51 @@ const statusLabel = (statusId) => ({
 const formatSummary = (html) => {
     if (!html) return '';
     return html
-        .replace(/<br>/gi, '')
-        .replace(/(<strong>(?!Document Type))/g, '<br>$1');
+        // Remove "Document Type: [anything]" including surrounding <br> and <strong> tags
+        .replace(/<strong>Document Type:<\/strong>[^<]*(<br\s*\/?>)?\s*/gi, '')
+        .replace(/<br\s*\/?>\s*<strong>Document Type:<\/strong>[^<]*/gi, '')
+        // Clean up any leading <br>
+        .replace(/^(<br\s*\/?>)+/gi, '')
+        // Add line breaks before other strong tags
+        .replace(/(<strong>(?!Sender))/g, '<br>$1')
+        .trim();
 };
 
-const MailReader = ({ doc, staff, onAssign, localAssigned, onStatusChanged, onDeleted }) => {
+const sourceLabel = (sourceTypeId) => ({
+    10: { icon: '📠', label: 'Fax' },
+    11: { icon: '✉️', label: 'Email' },
+    12: { icon: '🖨️', label: 'Scanner' },
+}[sourceTypeId] ?? { icon: '📄', label: 'Document' });
+
+const MailReader = ({ doc, staff, onAssign, localAssigned, onStatusChanged, onDeleted, onChecksChanged }) => {
     const [fullDoc, setFullDoc] = React.useState(null);
 
     React.useEffect(() => {
         if (!doc?.documentId) { setFullDoc(null); return; }
-        setFullDoc(null); // clear while loading
+        setFullDoc(null);
         axios.get(`/api/admin/document/${doc.documentId}`)
             .then(r => setFullDoc(r.data))
-            .catch(() => setFullDoc(doc)); // fallback to passed doc
+            .catch(() => setFullDoc(doc));
     }, [doc?.documentId]);
 
-    // Merge: use fullDoc for heavy fields, doc for live status updates
-    const mergedDoc = fullDoc ? { ...fullDoc, ...doc, aiSummary: fullDoc.aiSummary, ocrText: fullDoc.ocrText } : doc;
+    const mergedDoc = fullDoc
+        ? {
+            ...fullDoc, ...doc,
+            aiSummary: fullDoc.aiSummary,
+            ocrText: fullDoc.ocrText,
+            monitoredInboxEmail: fullDoc.monitoredInboxEmail,
+            fetchedAt: fullDoc.fetchedAt,
+            sourceTypeId: fullDoc.sourceTypeId ?? doc.sourceTypeId,
+        }
+        : doc;
+
     const [moving, setMoving] = useState(false);
     const [feedback, setFeedback] = useState(null);
     const [assignment, setAssignment] = useState(null);
     const [confirmDelete, setConfirmDelete] = useState(false);
     const [checkData, setCheckData] = useState(null);
     const [aiSuggestion, setAiSuggestion] = useState(null);
+    const [removingCheck, setRemovingCheck] = useState(false);
 
     useEffect(() => {
         setAssignment(null);
@@ -54,6 +85,7 @@ const MailReader = ({ doc, staff, onAssign, localAssigned, onStatusChanged, onDe
         setConfirmDelete(false);
         setCheckData(null);
         setAiSuggestion(null);
+        setRemovingCheck(false);
         if (!doc) return;
 
         axios.get(`/api/assignment/${doc.documentId}`)
@@ -87,6 +119,9 @@ const MailReader = ({ doc, staff, onAssign, localAssigned, onStatusChanged, onDe
     const isTrashed = effectiveStatusId === 9;
     const isSpamOrPromo = isSpam || isPromotion;
     const canAssign = !!mergedDoc?.aiSummary && staff.length > 0 && !isSpamOrPromo && !isTrashed;
+
+    const src = sourceLabel(mergedDoc?.sourceTypeId);
+    const isEmailOrFax = mergedDoc?.sourceTypeId === 10 || mergedDoc?.sourceTypeId === 11;
 
     const handleNotSpam = async () => {
         setMoving(true); setFeedback(null);
@@ -138,6 +173,20 @@ const MailReader = ({ doc, staff, onAssign, localAssigned, onStatusChanged, onDe
         } catch { setFeedback('Something went wrong.'); setMoving(false); }
     };
 
+    const handleNotACheck = async () => {
+        setRemovingCheck(true);
+        try {
+            await axios.post('/api/feedback/not-check', { documentId: doc.documentId });
+            setCheckData(null);
+            setFeedback('✅ Removed — AI will learn from this correction');
+            if (onChecksChanged) onChecksChanged();
+        } catch {
+            setFeedback('Something went wrong.');
+        } finally {
+            setRemovingCheck(false);
+        }
+    };
+
     return (
         <div style={styles.reader}>
 
@@ -147,18 +196,12 @@ const MailReader = ({ doc, staff, onAssign, localAssigned, onStatusChanged, onDe
                     <span style={{ ...styles.statusPill, color: status.color, background: status.bg }}>
                         {status.label}
                     </span>
-                    {checkData && (
-                        <span style={styles.checkPill}>
-                            💰 Check
-                        </span>
-                    )}
+                    {checkData && <span style={styles.checkPill}>💰 Check</span>}
                     {aiSuggestion && (
                         <span style={{
                             ...styles.confidencePill,
-                            ...(aiSuggestion.confidence >= 8
-                                ? styles.confidenceHigh
-                                : aiSuggestion.confidence >= 5
-                                    ? styles.confidenceMid
+                            ...(aiSuggestion.confidence >= 8 ? styles.confidenceHigh
+                                : aiSuggestion.confidence >= 5 ? styles.confidenceMid
                                     : styles.confidenceLow)
                         }}>
                             AI {aiSuggestion.confidence}/10
@@ -171,35 +214,26 @@ const MailReader = ({ doc, staff, onAssign, localAssigned, onStatusChanged, onDe
                     )}
                 </div>
                 <div style={styles.topRight}>
-
-                    {/* Trashed document actions */}
                     {isTrashed && (
                         <>
                             <button style={styles.restoreBtn} onClick={handleRestore} disabled={moving}>
                                 {moving ? 'Restoring…' : '↩ Restore'}
                             </button>
                             {!confirmDelete ? (
-                                <button style={styles.deleteForeverBtn}
-                                    onClick={() => setConfirmDelete(true)} disabled={moving}>
+                                <button style={styles.deleteForeverBtn} onClick={() => setConfirmDelete(true)} disabled={moving}>
                                     🗑 Delete Forever
                                 </button>
                             ) : (
                                 <div style={styles.confirmWrap}>
                                     <span style={styles.confirmText}>Are you sure?</span>
-                                    <button style={styles.confirmYes}
-                                        onClick={handleDeleteForever} disabled={moving}>
+                                    <button style={styles.confirmYes} onClick={handleDeleteForever} disabled={moving}>
                                         {moving ? 'Deleting…' : 'Yes, delete'}
                                     </button>
-                                    <button style={styles.confirmNo}
-                                        onClick={() => setConfirmDelete(false)}>
-                                        Cancel
-                                    </button>
+                                    <button style={styles.confirmNo} onClick={() => setConfirmDelete(false)}>Cancel</button>
                                 </div>
                             )}
                         </>
                     )}
-
-                    {/* Normal document actions */}
                     {!isTrashed && (
                         <>
                             {isSpam && (
@@ -222,13 +256,11 @@ const MailReader = ({ doc, staff, onAssign, localAssigned, onStatusChanged, onDe
                                     {isAssigned ? 'Reassign' : 'Assign'}
                                 </button>
                             )}
-                            <button style={styles.trashBtn} onClick={handleTrash}
-                                disabled={moving} title="Move to Trash">
+                            <button style={styles.trashBtn} onClick={handleTrash} disabled={moving} title="Move to Trash">
                                 🗑
                             </button>
                         </>
                     )}
-
                     {doc.sharePointUrl && (
                         <a href={doc.sharePointUrl} target="_blank" rel="noreferrer" style={styles.spLink}>
                             View in SharePoint ↗
@@ -237,17 +269,12 @@ const MailReader = ({ doc, staff, onAssign, localAssigned, onStatusChanged, onDe
                 </div>
             </div>
 
-            {/* Feedback banner */}
             {feedback && <div style={styles.feedbackBanner}>{feedback}</div>}
-
-            {/* Trashed banner */}
             {isTrashed && !feedback && (
                 <div style={styles.trashedBanner}>
-                    🗑 This document is in the Trash. Restore it to bring it back to the Inbox, or delete it forever to remove it permanently.
+                    🗑 This document is in the Trash. Restore it or delete it forever.
                 </div>
             )}
-
-            {/* Spam/Promo explanation */}
             {isSpam && !feedback && (
                 <div style={styles.spamBanner}>
                     🚫 <b>Spam</b> — click "Not Spam" to move to Inbox and permanently whitelist this sender.
@@ -255,7 +282,7 @@ const MailReader = ({ doc, staff, onAssign, localAssigned, onStatusChanged, onDe
             )}
             {isPromotion && !feedback && (
                 <div style={styles.promoBanner}>
-                    📢 <b>Promotion</b> — click "This is real mail" if it needs attention. The sender will not be whitelisted because they may send real mail too.
+                    📢 <b>Promotion</b> — click "This is real mail" if it needs attention.
                 </div>
             )}
 
@@ -274,7 +301,31 @@ const MailReader = ({ doc, staff, onAssign, localAssigned, onStatusChanged, onDe
                         )}
                     </div>
                     <div style={styles.filename}>{doc.originalFileName}</div>
-                    <div style={styles.date}>{formatFullDate(doc.uploadedAt)}</div>
+
+                    {/* Source type + received time */}
+                    <div style={styles.metaRow}>
+                        <span style={styles.sourceTag}>{src.icon} {src.label}</span>
+                        <span style={styles.metaSep}>·</span>
+                        <span style={styles.metaText}>Received: {formatFullDate(doc.uploadedAt)}</span>
+                    </div>
+
+                    {/* Fetched time — only for email/fax */}
+                    {isEmailOrFax && mergedDoc?.fetchedAt && (
+                        <div style={styles.metaRow}>
+                            <span style={styles.metaText}>
+                                📥 Fetched by Doario: {formatShortDate(mergedDoc.fetchedAt)}
+                            </span>
+                        </div>
+                    )}
+
+                    {/* Source inbox */}
+                    {mergedDoc?.monitoredInboxEmail && (
+                        <div style={styles.metaRow}>
+                            <span style={styles.metaText}>
+                                📬 From inbox: <strong style={{ color: '#0d9488' }}>{mergedDoc.monitoredInboxEmail}</strong>
+                            </span>
+                        </div>
+                    )}
                 </div>
             </div>
 
@@ -293,25 +344,21 @@ const MailReader = ({ doc, staff, onAssign, localAssigned, onStatusChanged, onDe
                             })}
                         </span>
                     </span>
-                    {assignment.note && (
-                        <span style={styles.assignmentNote}>📝 {assignment.note}</span>
-                    )}
+                    {assignment.note && <span style={styles.assignmentNote}>📝 {assignment.note}</span>}
                     {assignment.deliveryStatus === 'permanent_fail' && (
-                        <span style={styles.deliveryFail}
-                            title={assignment.deliveryError || 'Email could not be delivered after 3 attempts.'}>
+                        <span style={styles.deliveryFail} title={assignment.deliveryError || ''}>
                             ⚠ Email failed — address may not exist
                         </span>
                     )}
                     {assignment.deliveryStatus === 'failed' && (
-                        <span style={styles.deliveryWarn}
-                            title={assignment.deliveryError || 'Delivery failed, retrying…'}>
+                        <span style={styles.deliveryWarn} title={assignment.deliveryError || ''}>
                             ⏳ Email retrying…
                         </span>
                     )}
                 </div>
             )}
 
-            {/* AI Summary */}
+            {/* Body */}
             <div style={styles.body}>
                 {mergedDoc?.aiSummary ? (
                     <>
@@ -358,8 +405,22 @@ const MailReader = ({ doc, staff, onAssign, localAssigned, onStatusChanged, onDe
                                 </div>
                                 <div style={styles.checkField}>
                                     <span style={styles.checkLabel}>Received</span>
-                                    <span style={styles.checkValue}>{new Date(checkData.createdAt + 'Z').toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+                                    <span style={styles.checkValue}>
+                                        {new Date(checkData.createdAt + 'Z').toLocaleDateString([], {
+                                            month: 'short', day: 'numeric', year: 'numeric'
+                                        })}
+                                    </span>
                                 </div>
+                            </div>
+                            <div style={styles.notCheckRow}>
+                                <button
+                                    style={{ ...styles.notCheckBtn, opacity: removingCheck ? 0.6 : 1 }}
+                                    disabled={removingCheck}
+                                    onClick={handleNotACheck}
+                                >
+                                    {removingCheck ? 'Removing…' : '✕ Not a Check'}
+                                </button>
+                                <span style={styles.notCheckHint}>AI will learn from this correction</span>
                             </div>
                         </div>
                     </div>
@@ -370,175 +431,75 @@ const MailReader = ({ doc, staff, onAssign, localAssigned, onStatusChanged, onDe
 };
 
 const styles = {
-    empty: {
-        flex: 1, display: 'flex', flexDirection: 'column',
-        alignItems: 'center', justifyContent: 'center',
-        background: '#f0f4f8', color: '#6b8499', gap: 8,
-    },
+    empty: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#f0f4f8', color: '#6b8499', gap: 8 },
     emptyIcon: { fontSize: 48, marginBottom: 8 },
     emptyTitle: { fontSize: 16, fontWeight: 600, color: '#1a2e3b' },
     emptySub: { fontSize: 13 },
-    reader: {
-        flex: 1, background: '#fff', display: 'flex',
-        flexDirection: 'column', height: '100vh', overflowY: 'auto',
-        fontFamily: "'Plus Jakarta Sans', sans-serif",
-    },
-    topBar: {
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '14px 24px', borderBottom: '1px solid #e2eaef',
-        gap: 12, flexWrap: 'wrap', background: '#fff',
-    },
+    reader: { flex: 1, background: '#fff', display: 'flex', flexDirection: 'column', height: '100vh', overflowY: 'auto', fontFamily: "'Plus Jakarta Sans', sans-serif" },
+    topBar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 24px', borderBottom: '1px solid #e2eaef', gap: 12, flexWrap: 'wrap', background: '#fff' },
     topLeft: { display: 'flex', alignItems: 'center', gap: 8 },
     topRight: { display: 'flex', alignItems: 'center', gap: 10 },
-    statusPill: {
-        fontSize: 11, fontWeight: 600, padding: '4px 12px',
-        borderRadius: 20, letterSpacing: 0.3,
-    },
-    processingPill: {
-        fontSize: 11, color: '#d97706', background: '#fef3c7',
-        padding: '4px 12px', borderRadius: 20,
-    },
-    assignBtn: {
-        padding: '8px 20px', borderRadius: 8, border: 'none',
-        fontSize: 12, fontWeight: 700, cursor: 'pointer',
-        background: '#0d9488', color: '#fff', fontFamily: 'inherit',
-    },
+    statusPill: { fontSize: 11, fontWeight: 600, padding: '4px 12px', borderRadius: 20, letterSpacing: 0.3 },
+    processingPill: { fontSize: 11, color: '#d97706', background: '#fef3c7', padding: '4px 12px', borderRadius: 20 },
+    assignBtn: { padding: '8px 20px', borderRadius: 8, border: 'none', fontSize: 12, fontWeight: 700, cursor: 'pointer', background: '#0d9488', color: '#fff', fontFamily: 'inherit' },
     assignBtnDisabled: { background: '#e2eaef', color: '#6b8499', cursor: 'not-allowed' },
-    trashBtn: {
-        padding: '7px 10px', borderRadius: 8, border: '1px solid #e2eaef',
-        background: '#fff', color: '#6b7280', fontSize: 14,
-        cursor: 'pointer', fontFamily: 'inherit', lineHeight: 1,
-    },
-    restoreBtn: {
-        padding: '7px 16px', borderRadius: 8, border: '1px solid #0d9488',
-        background: '#fff', color: '#0d9488', fontSize: 12,
-        fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
-    },
-    deleteForeverBtn: {
-        padding: '7px 16px', borderRadius: 8, border: '1px solid #dc2626',
-        background: '#fff', color: '#dc2626', fontSize: 12,
-        fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
-    },
+    trashBtn: { padding: '7px 10px', borderRadius: 8, border: '1px solid #e2eaef', background: '#fff', color: '#6b7280', fontSize: 14, cursor: 'pointer', fontFamily: 'inherit', lineHeight: 1 },
+    restoreBtn: { padding: '7px 16px', borderRadius: 8, border: '1px solid #0d9488', background: '#fff', color: '#0d9488', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' },
+    deleteForeverBtn: { padding: '7px 16px', borderRadius: 8, border: '1px solid #dc2626', background: '#fff', color: '#dc2626', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' },
     confirmWrap: { display: 'flex', alignItems: 'center', gap: 8 },
     confirmText: { fontSize: 12, color: '#dc2626', fontWeight: 600 },
-    confirmYes: {
-        padding: '6px 14px', borderRadius: 8, border: 'none',
-        background: '#dc2626', color: '#fff', fontSize: 12,
-        fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
-    },
-    confirmNo: {
-        padding: '6px 14px', borderRadius: 8, border: '1px solid #e2eaef',
-        background: '#fff', color: '#6b7280', fontSize: 12,
-        cursor: 'pointer', fontFamily: 'inherit',
-    },
-    moveBtnRed: {
-        padding: '7px 16px', borderRadius: 8, border: '1px solid #dc2626',
-        background: '#fff', color: '#dc2626', fontSize: 12,
-        fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
-    },
-    moveBtnPurple: {
-        padding: '7px 16px', borderRadius: 8, border: '1px solid #7c3aed',
-        background: '#fff', color: '#7c3aed', fontSize: 12,
-        fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
-    },
+    confirmYes: { padding: '6px 14px', borderRadius: 8, border: 'none', background: '#dc2626', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' },
+    confirmNo: { padding: '6px 14px', borderRadius: 8, border: '1px solid #e2eaef', background: '#fff', color: '#6b7280', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' },
+    moveBtnRed: { padding: '7px 16px', borderRadius: 8, border: '1px solid #dc2626', background: '#fff', color: '#dc2626', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' },
+    moveBtnPurple: { padding: '7px 16px', borderRadius: 8, border: '1px solid #7c3aed', background: '#fff', color: '#7c3aed', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' },
     spLink: { fontSize: 12, color: '#0d9488', textDecoration: 'none', fontWeight: 500 },
-    feedbackBanner: {
-        padding: '10px 24px', background: '#d1fae5',
-        borderBottom: '1px solid #99e0d9', fontSize: 12, color: '#065f46',
-    },
-    trashedBanner: {
-        padding: '10px 24px', background: '#f3f4f6',
-        borderBottom: '1px solid #e2eaef', fontSize: 12, color: '#6b7280',
-    },
-    spamBanner: {
-        padding: '10px 24px', background: '#fee2e2',
-        borderBottom: '1px solid #fca5a5', fontSize: 12, color: '#991b1b',
-    },
-    promoBanner: {
-        padding: '10px 24px', background: '#ede9fe',
-        borderBottom: '1px solid #c4b5fd', fontSize: 12, color: '#5b21b6',
-    },
+    feedbackBanner: { padding: '10px 24px', background: '#d1fae5', borderBottom: '1px solid #99e0d9', fontSize: 12, color: '#065f46' },
+    trashedBanner: { padding: '10px 24px', background: '#f3f4f6', borderBottom: '1px solid #e2eaef', fontSize: 12, color: '#6b7280' },
+    spamBanner: { padding: '10px 24px', background: '#fee2e2', borderBottom: '1px solid #fca5a5', fontSize: 12, color: '#991b1b' },
+    promoBanner: { padding: '10px 24px', background: '#ede9fe', borderBottom: '1px solid #c4b5fd', fontSize: 12, color: '#5b21b6' },
     header: { display: 'flex', alignItems: 'flex-start', gap: 14, padding: '20px 24px' },
-    avatar: {
-        width: 44, height: 44, borderRadius: 10,
-        background: 'linear-gradient(135deg, #0d9488, #0f2d4a)',
-        color: '#fff', display: 'flex', alignItems: 'center',
-        justifyContent: 'center', fontSize: 18, fontWeight: 800, flexShrink: 0,
-    },
+    avatar: { width: 44, height: 44, borderRadius: 10, background: 'linear-gradient(135deg, #0d9488, #0f2d4a)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 800, flexShrink: 0 },
     headerInfo: { flex: 1, minWidth: 0 },
-    senderName: {
-        fontSize: 15, fontWeight: 700, color: '#1a2e3b',
-        display: 'flex', alignItems: 'baseline', gap: 6,
-        flexWrap: 'wrap', marginBottom: 3,
-    },
+    senderName: { fontSize: 15, fontWeight: 700, color: '#1a2e3b', display: 'flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap', marginBottom: 3 },
     senderEmail: { fontSize: 12, color: '#0d9488', textDecoration: 'none', fontWeight: 400 },
-    filename: { fontSize: 12, color: '#6b8499', marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-    date: { fontSize: 11, color: '#6b8499' },
+    filename: { fontSize: 12, color: '#6b8499', marginBottom: 5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+    metaRow: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#6b8499', marginBottom: 3 },
+    metaSep: { color: '#c8d5e0' },
+    metaText: { color: '#6b8499' },
+    sourceTag: { fontSize: 10, fontWeight: 700, background: '#e6f7f5', color: '#0d9488', padding: '2px 8px', borderRadius: 20 },
     divider: { height: 1, background: '#e2eaef', margin: '0 24px' },
-    assignmentStrip: {
-        display: 'flex', alignItems: 'baseline', flexWrap: 'wrap', gap: 6,
-        padding: '10px 24px', background: '#f0fdf4',
-        borderBottom: '1px solid #bbf7d0', fontSize: 12,
-    },
+    assignmentStrip: { display: 'flex', alignItems: 'baseline', flexWrap: 'wrap', gap: 6, padding: '10px 24px', background: '#f0fdf4', borderBottom: '1px solid #bbf7d0', fontSize: 12 },
     assignmentIcon: { fontSize: 13, flexShrink: 0 },
     assignmentText: { color: '#065f46' },
     assignmentEmail: { color: '#059669', fontWeight: 400 },
     assignmentDate: { color: '#6b8499' },
-    assignmentNote: {
-        marginLeft: 8, color: '#92400e', background: '#fef3c7',
-        padding: '2px 8px', borderRadius: 4, fontSize: 11,
-    },
-    deliveryFail: {
-        marginLeft: 8, color: '#991b1b', background: '#fee2e2',
-        padding: '2px 8px', borderRadius: 4, fontSize: 11,
-        fontWeight: 600, cursor: 'help',
-    },
-    deliveryWarn: {
-        marginLeft: 8, color: '#92400e', background: '#fef3c7',
-        padding: '2px 8px', borderRadius: 4, fontSize: 11, cursor: 'help',
-    },
+    assignmentNote: { marginLeft: 8, color: '#92400e', background: '#fef3c7', padding: '2px 8px', borderRadius: 4, fontSize: 11 },
+    deliveryFail: { marginLeft: 8, color: '#991b1b', background: '#fee2e2', padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600, cursor: 'help' },
+    deliveryWarn: { marginLeft: 8, color: '#92400e', background: '#fef3c7', padding: '2px 8px', borderRadius: 4, fontSize: 11, cursor: 'help' },
     body: { padding: '20px 24px', flex: 1 },
     summaryHeader: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 },
     summaryDot: { width: 8, height: 8, borderRadius: '50%', background: '#0d9488' },
-    summaryTitle: {
-        fontSize: 10, fontWeight: 700, color: '#0d9488',
-        textTransform: 'uppercase', letterSpacing: 2,
-    },
-    summaryBox: {
-        border: '1px solid #e2eaef', borderRadius: 10,
-        padding: '16px 18px', background: '#f0f4f8',
-    },
+    summaryTitle: { fontSize: 10, fontWeight: 700, color: '#0d9488', textTransform: 'uppercase', letterSpacing: 2 },
+    summaryBox: { border: '1px solid #e2eaef', borderRadius: 10, padding: '16px 18px', background: '#f0f4f8' },
     summary: { fontSize: 14, lineHeight: 2, color: '#1a2e3b' },
     pending: { fontSize: 14, color: '#6b8499', padding: '20px 0' },
-    confidencePill: {
-        fontSize: 11, fontWeight: 700, padding: '4px 10px',
-        borderRadius: 20, letterSpacing: 0.3,
-    },
+    confidencePill: { fontSize: 11, fontWeight: 700, padding: '4px 10px', borderRadius: 20, letterSpacing: 0.3 },
     confidenceHigh: { background: '#d1fae5', color: '#065f46' },
     confidenceMid: { background: '#fef3c7', color: '#92400e' },
     confidenceLow: { background: '#fee2e2', color: '#991b1b' },
-    checkPill: {
-        fontSize: 11, fontWeight: 700, padding: '4px 12px',
-        borderRadius: 20, background: '#fef3c7', color: '#92400e',
-    },
+    checkPill: { fontSize: 11, fontWeight: 700, padding: '4px 12px', borderRadius: 20, background: '#fef3c7', color: '#92400e' },
     checkPanel: { marginTop: 24 },
     checkPanelHeader: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 },
     checkPanelDot: { width: 8, height: 8, borderRadius: '50%', background: '#d97706' },
-    checkPanelTitle: {
-        fontSize: 10, fontWeight: 700, color: '#d97706',
-        textTransform: 'uppercase', letterSpacing: 2,
-    },
-    checkPanelBox: {
-        border: '1px solid #fde68a', borderRadius: 10,
-        padding: '16px 18px', background: '#fffbeb',
-    },
-    checkGrid: {
-        display: 'grid', gridTemplateColumns: '1fr 1fr',
-        gap: '14px 24px',
-    },
+    checkPanelTitle: { fontSize: 10, fontWeight: 700, color: '#d97706', textTransform: 'uppercase', letterSpacing: 2 },
+    checkPanelBox: { border: '1px solid #fde68a', borderRadius: 10, padding: '16px 18px', background: '#fffbeb' },
+    checkGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px 24px' },
     checkField: { display: 'flex', flexDirection: 'column', gap: 3 },
     checkLabel: { fontSize: 10, fontWeight: 700, color: '#92400e', textTransform: 'uppercase', letterSpacing: 1 },
     checkValue: { fontSize: 15, fontWeight: 700, color: '#1a2e3b' },
+    notCheckRow: { display: 'flex', alignItems: 'center', gap: 12, marginTop: 16, paddingTop: 14, borderTop: '1px solid #fde68a' },
+    notCheckBtn: { padding: '6px 16px', background: 'transparent', border: '1px solid #d97706', borderRadius: 8, fontSize: 12, fontWeight: 600, color: '#92400e', cursor: 'pointer', fontFamily: 'inherit' },
+    notCheckHint: { fontSize: 11, color: '#92400e', opacity: 0.7 },
 };
 
 export default MailReader;

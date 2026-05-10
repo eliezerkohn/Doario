@@ -3,6 +3,7 @@ using Doario.Data.Models.Mail;
 using Doario.Data.Models.SaaS;
 using Doario.Data.Seeding;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 
 namespace Doario.Data;
 
@@ -22,6 +23,9 @@ public class DoarioDataContext : DbContext
     {
         if (!optionsBuilder.IsConfigured)
             optionsBuilder.UseSqlServer(_connectionString);
+
+        optionsBuilder.ConfigureWarnings(w =>
+            w.Ignore(RelationalEventId.PendingModelChangesWarning));
     }
 
     // SaaS
@@ -31,7 +35,7 @@ public class DoarioDataContext : DbContext
     public DbSet<DocumentUsage> DocumentUsages { get; set; }
     public DbSet<StaffSyncLog> StaffSyncLogs { get; set; }
     public DbSet<TenantConnectorConfig> TenantConnectorConfigs { get; set; }
-    public DbSet<SubscriptionPlan> SubscriptionPlans { get; set; }  // ← NEW
+    public DbSet<SubscriptionPlan> SubscriptionPlans { get; set; }
 
     public DbSet<TenantInboxSettings> TenantInboxSettings { get; set; }
     public DbSet<TenantMonitoredInbox> TenantMonitoredInboxes { get; set; }
@@ -81,24 +85,25 @@ public class DoarioDataContext : DbContext
 
         // ── TenantSubscription ───────────────────────────────────────
         modelBuilder.Entity<TenantSubscription>()
-            .Property(t => t.MonthlyPrice).HasPrecision(18, 2);
-        modelBuilder.Entity<TenantSubscription>()
-            .Property(t => t.ExtraDocumentPrice).HasPrecision(18, 4);  // 4dp for extra doc price
-        modelBuilder.Entity<TenantSubscription>()
             .Property(t => t.DiscountPercent).HasPrecision(5, 2);
         modelBuilder.Entity<TenantSubscription>()
-            .Property(d => d.PricePerStaff).HasPrecision(18, 2);
-        modelBuilder.Entity<TenantSubscription>()
             .HasOne(ts => ts.SubscriptionPlan)
-            .WithMany()
+            .WithMany(p => p.Subscriptions)
             .HasForeignKey(ts => ts.SubscriptionPlanId)
-            .OnDelete(DeleteBehavior.Restrict);                         // ← NEW FK
+            .OnDelete(DeleteBehavior.Restrict);
 
         // ── SubscriptionPlan ─────────────────────────────────────────
         modelBuilder.Entity<SubscriptionPlan>()
             .Property(p => p.MonthlyPrice).HasPrecision(18, 2);
         modelBuilder.Entity<SubscriptionPlan>()
-            .Property(p => p.ExtraDocumentPrice).HasPrecision(18, 4);  // ← NEW
+            .Property(p => p.ExtraDocumentPrice).HasPrecision(18, 4);
+
+        // ── PromoCode ─────────────────────────────────────────────────
+        modelBuilder.Entity<PromoCode>(e =>
+        {
+            e.Property(x => x.DiscountPercent).HasPrecision(5, 2);
+            e.Property(x => x.FlatDiscountPerDoc).HasPrecision(18, 4);
+        });
 
         // ── Document ─────────────────────────────────────────────────
         modelBuilder.Entity<ImportedStaff>().ToTable("ImportedStaff");
@@ -246,12 +251,8 @@ public class DoarioDataContext : DbContext
 
         modelBuilder.Entity<TenantBillingUsage>().ToTable("TenantBillingUsage");
         modelBuilder.Entity<TenantPromo>().ToTable("TenantPromo");
-
-        modelBuilder.Entity<TenantPromo>().ToTable("TenantPromo");
         modelBuilder.Entity<PromoCode>().ToTable("PromoCodes");
 
-
         DoarioDataSeeder.Seed(modelBuilder);
-
     }
 }

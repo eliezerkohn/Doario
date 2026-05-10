@@ -8,11 +8,6 @@ using Microsoft.Graph.Models;
 
 namespace Doario.Web.Services;
 
-/// <summary>
-/// Background service that wakes up every N seconds.
-/// Checks for duplicate filenames before saving to prevent double-processing.
-/// Skips inboxes currently being processed by ProcessInboxQueue.
-/// </summary>
 public class DoarioBackgroundService : BackgroundService
 {
     private readonly IServiceScopeFactory _scopeFactory;
@@ -49,20 +44,12 @@ public class DoarioBackgroundService : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var wakeUpSeconds = _config.GetValue<int>("BackgroundService:WakeUpIntervalSeconds", 30);
-        _logger.LogInformation(
-            "DoarioBackgroundService started. Wake-up interval: {Seconds}s", wakeUpSeconds);
+        _logger.LogInformation("DoarioBackgroundService started. Wake-up interval: {Seconds}s", wakeUpSeconds);
 
         while (!stoppingToken.IsCancellationRequested)
         {
-            try
-            {
-                await ProcessAllAsync();
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "DoarioBackgroundService: unhandled error in main loop.");
-            }
-
+            try { await ProcessAllAsync(); }
+            catch (Exception ex) { _logger.LogError(ex, "DoarioBackgroundService: unhandled error."); }
             await Task.Delay(TimeSpan.FromSeconds(wakeUpSeconds), stoppingToken);
         }
     }
@@ -74,7 +61,6 @@ public class DoarioBackgroundService : BackgroundService
         var inboxSettingsRepo = scope.ServiceProvider.GetRequiredService<ITenantInboxSettingsRepository>();
         var now = DateTime.UtcNow;
 
-        // ── Poll each monitored inbox ─────────────────────────────────────────
         var activeInboxes = await monitoredInboxRepo.GetAllActiveAsync();
         foreach (var inbox in activeInboxes)
         {
@@ -83,7 +69,6 @@ public class DoarioBackgroundService : BackgroundService
 
             if (isForced || secondsSinceLastPoll >= inbox.PollingIntervalSeconds)
             {
-                // Skip if ProcessInboxQueue is already handling this inbox
                 var queueStatus = _processInboxQueue.GetStatus(inbox.TenantId.ToString());
                 var alreadyProcessing = queueStatus.IsRunning &&
                     queueStatus.Inboxes.Any(i =>
@@ -92,9 +77,7 @@ public class DoarioBackgroundService : BackgroundService
 
                 if (alreadyProcessing)
                 {
-                    _logger.LogDebug(
-                        "DoarioBackgroundService: skipping inbox {Email} — already being processed by ProcessInboxQueue.",
-                        inbox.EmailAddress);
+                    _logger.LogDebug("DoarioBackgroundService: skipping {Email} — already in ProcessInboxQueue.", inbox.EmailAddress);
                     continue;
                 }
 
@@ -102,7 +85,6 @@ public class DoarioBackgroundService : BackgroundService
             }
         }
 
-        // ── Staff sync per tenant ─────────────────────────────────────────────
         var allSettings = await inboxSettingsRepo.GetAllAsync();
         foreach (var settings in allSettings)
         {
@@ -111,18 +93,14 @@ public class DoarioBackgroundService : BackgroundService
                 await SyncStaffAsync(scope, settings, inboxSettingsRepo, now);
         }
 
-        // ── Flush unreported billing usage to Stripe ──────────────────────────
         await FlushBillingUsageAsync(scope);
 
-        // ── Auto-recover stuck pipeline documents ─────────────────────────────
         if (now - _lastStuckCheck >= StuckCheckInterval)
         {
             await RecoverStuckDocumentsAsync(scope);
             _lastStuckCheck = now;
         }
     }
-
-    // ── Stuck pipeline recovery ───────────────────────────────────────────────
 
     private async Task RecoverStuckDocumentsAsync(IServiceScope scope)
     {
@@ -137,56 +115,25 @@ public class DoarioBackgroundService : BackgroundService
                          && (d.OcrText == null || d.OcrText == "")
                          && d.UploadedAt < now.AddMinutes(-10)
                          && d.SharePointUrl != null && d.SharePointUrl != "")
-                .Select(d => d.DocumentId)
-                .ToListAsync();
-
-            if (stuckPreOcr.Any())
-            {
-                _logger.LogWarning(
-                    "DoarioBackgroundService: {Count} documents stuck before OCR — retrying.",
-                    stuckPreOcr.Count);
-                foreach (var id in stuckPreOcr)
-                    ocrService.RetryOcr(id);
-            }
+                .Select(d => d.DocumentId).ToListAsync();
+            if (stuckPreOcr.Any()) foreach (var id in stuckPreOcr) ocrService.RetryOcr(id);
 
             var ocrFailed = await db.Documents
                 .Where(d => d.DocumentStatusId == 5
                          && d.UploadedAt < now.AddMinutes(-30)
                          && d.SharePointUrl != null && d.SharePointUrl != "")
-                .Select(d => d.DocumentId)
-                .ToListAsync();
-
-            if (ocrFailed.Any())
-            {
-                _logger.LogWarning(
-                    "DoarioBackgroundService: {Count} OCR-failed documents — retrying.",
-                    ocrFailed.Count);
-                foreach (var id in ocrFailed)
-                    ocrService.RetryOcr(id);
-            }
+                .Select(d => d.DocumentId).ToListAsync();
+            if (ocrFailed.Any()) foreach (var id in ocrFailed) ocrService.RetryOcr(id);
 
             var stuckAi = await db.Documents
                 .Where(d => d.OcrText != null && d.OcrText != ""
                          && (d.AiSummary == null || d.AiSummary == "")
                          && d.UploadedAt < now.AddMinutes(-5))
-                .Select(d => d.DocumentId)
-                .ToListAsync();
-
-            if (stuckAi.Any())
-            {
-                _logger.LogWarning(
-                    "DoarioBackgroundService: {Count} documents stuck without AI summary — requeuing.",
-                    stuckAi.Count);
-                _aiQueue.EnqueueBatch(stuckAi);
-            }
+                .Select(d => d.DocumentId).ToListAsync();
+            if (stuckAi.Any()) _aiQueue.EnqueueBatch(stuckAi);
         }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "DoarioBackgroundService: stuck document recovery failed.");
-        }
+        catch (Exception ex) { _logger.LogError(ex, "DoarioBackgroundService: stuck document recovery failed."); }
     }
-
-    // ── Flush pending Stripe usage records ────────────────────────────────────
 
     private async Task FlushBillingUsageAsync(IServiceScope scope)
     {
@@ -195,13 +142,8 @@ public class DoarioBackgroundService : BackgroundService
             var stripeService = scope.ServiceProvider.GetRequiredService<StripeService>();
             await stripeService.FlushAllPendingUsageAsync();
         }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "DoarioBackgroundService: Stripe usage flush failed.");
-        }
+        catch (Exception ex) { _logger.LogError(ex, "DoarioBackgroundService: Stripe usage flush failed."); }
     }
-
-    // ── Process one monitored inbox ───────────────────────────────────────────
 
     private async Task ProcessInboxAsync(
         IServiceScope scope,
@@ -221,6 +163,7 @@ public class DoarioBackgroundService : BackgroundService
             var ocrService = scope.ServiceProvider.GetRequiredService<OcrService>();
             var errorLogRepo = scope.ServiceProvider.GetRequiredService<IErrorLogRepository>();
 
+            var fetchedAt = DateTime.UtcNow;
             var filterDate = inbox.LastProcessedAt.ToString("yyyy-MM-ddTHH:mm:ssZ");
             var filter = $"receivedDateTime ge {filterDate}";
 
@@ -231,22 +174,15 @@ public class DoarioBackgroundService : BackgroundService
                 .GetAsync(req =>
                 {
                     req.QueryParameters.Filter = filter;
-                    req.QueryParameters.Select = new[]
-                    {
-                        "id", "subject", "from", "receivedDateTime", "hasAttachments"
-                    };
+                    req.QueryParameters.Select = new[] { "id", "subject", "from", "receivedDateTime", "hasAttachments" };
                     req.QueryParameters.Top = 50;
                 });
 
             if (firstPage?.Value != null)
             {
                 allMessages.AddRange(firstPage.Value);
-                var pageIterator = Microsoft.Graph.PageIterator<Message, MessageCollectionResponse>
-                    .CreatePageIterator(graph, firstPage, msg =>
-                    {
-                        allMessages.Add(msg);
-                        return true;
-                    });
+                var pageIterator = PageIterator<Message, MessageCollectionResponse>
+                    .CreatePageIterator(graph, firstPage, msg => { allMessages.Add(msg); return true; });
                 await pageIterator.IterateAsync();
             }
 
@@ -261,22 +197,20 @@ public class DoarioBackgroundService : BackgroundService
             foreach (var message in allMessages)
             {
                 if (message.HasAttachments != true) continue;
-                await ProcessEmailAsync(graph, message, tenant, inbox, documentRepo, sharePointService, ocrService, errorLogRepo);
+                await ProcessEmailAsync(graph, message, tenant, inbox, documentRepo,
+                    sharePointService, ocrService, errorLogRepo, fetchedAt);
                 processed++;
             }
 
-            await monitoredInboxRepo.UpdateLastProcessedAtAsync(inbox.TenantMonitoredInboxId, now);
+            await monitoredInboxRepo.UpdateLastProcessedAtAsync(inbox.TenantMonitoredInboxId, fetchedAt);
             LastFetchCounts[inbox.TenantMonitoredInboxId] = processed;
 
-            _logger.LogInformation(
-                "DoarioBackgroundService: inbox {Inbox} — {Total} emails found, {Processed} with attachments processed.",
+            _logger.LogInformation("DoarioBackgroundService: inbox {Inbox} — {Total} emails, {Processed} processed.",
                 inbox.EmailAddress, allMessages.Count, processed);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex,
-                "DoarioBackgroundService: inbox processing failed for {Inbox} tenant {TenantId}",
-                inbox.EmailAddress, inbox.TenantId);
+            _logger.LogError(ex, "DoarioBackgroundService: inbox processing failed for {Inbox}", inbox.EmailAddress);
         }
     }
 
@@ -288,48 +222,42 @@ public class DoarioBackgroundService : BackgroundService
         IDocumentRepository documentRepo,
         SharePointService sharePointService,
         OcrService ocrService,
-        IErrorLogRepository errorLogRepo)
+        IErrorLogRepository errorLogRepo,
+        DateTime fetchedAt)
     {
         try
         {
             var sourceTypeId = inbox.IsFaxInbox ? 10 : 11;
-
             var attachments = await graph.Users[inbox.EmailAddress]
-                .Messages[message.Id]
-                .Attachments
-                .GetAsync();
+                .Messages[message.Id].Attachments.GetAsync();
 
             if (attachments?.Value == null) return;
 
             foreach (var attachment in attachments.Value)
             {
                 if (attachment is not FileAttachment fileAttachment) continue;
-
                 var ext = Path.GetExtension(fileAttachment.Name ?? "").ToLowerInvariant();
                 if (!AllowedAttachmentTypes.Contains(ext)) continue;
-
                 var contentBytes = fileAttachment.ContentBytes;
                 if (contentBytes == null || contentBytes.Length == 0) continue;
 
-                var timestamp = (message.ReceivedDateTime ?? DateTimeOffset.UtcNow)
+                var receivedTime = (message.ReceivedDateTime ?? DateTimeOffset.UtcNow)
                     .ToString("yyyyMMdd_HHmmss");
-                var originalName = fileAttachment.Name ?? $"attachment{ext}";
-                var prefix = inbox.IsFaxInbox ? "fax" : "email";
-                var fileName = $"{prefix}_{timestamp}_{originalName}";
+                var baseName = SanitiseFileName(
+                    Path.GetFileNameWithoutExtension(fileAttachment.Name ?? "document"));
 
-                // ── Duplicate check — skip if already saved ───────────────────
-                var alreadyExists = await documentRepo.ExistsByFileNameAsync(
-                    tenant.TenantId, fileName);
+                // Format: baseName_timestamp.ext
+                var fileName = $"{baseName}_{receivedTime}{ext}";
+
+                var alreadyExists = await documentRepo.ExistsByFileNameAsync(tenant.TenantId, fileName);
                 if (alreadyExists)
                 {
-                    _logger.LogDebug(
-                        "DoarioBackgroundService: skipping duplicate {FileName}", fileName);
+                    _logger.LogDebug("DoarioBackgroundService: skipping duplicate {FileName}", fileName);
                     continue;
                 }
 
                 using var stream = new MemoryStream(contentBytes);
-                var sharePointUrl = await sharePointService.UploadDocumentAsync(
-                    tenant.TenantId, stream, fileName);
+                var sharePointUrl = await sharePointService.UploadDocumentAsync(tenant.TenantId, stream, fileName);
 
                 var document = new Document
                 {
@@ -343,21 +271,19 @@ public class DoarioBackgroundService : BackgroundService
                     UploadedByStaffId = tenant.SystemStaffId,
                     SourceTypeId = sourceTypeId,
                     UploadedAt = message.ReceivedDateTime?.UtcDateTime ?? DateTime.UtcNow,
+                    FetchedAt = fetchedAt,
+                    MonitoredInboxId = inbox.TenantMonitoredInboxId,
                 };
 
                 await documentRepo.CreateAsync(document);
                 ocrService.RunInBackground(document.DocumentId);
 
-                _logger.LogInformation(
-                    "DoarioBackgroundService: saved {Type} {File} for tenant {TenantId}",
-                    prefix, fileName, tenant.TenantId);
+                _logger.LogInformation("DoarioBackgroundService: saved {File} for tenant {TenantId}", fileName, tenant.TenantId);
             }
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex,
-                "DoarioBackgroundService: failed to process email {MessageId}",
-                message.Id);
+            _logger.LogError(ex, "DoarioBackgroundService: failed to process email {MessageId}", message.Id);
             try
             {
                 await errorLogRepo.AddAsync(new ErrorLog
@@ -374,8 +300,6 @@ public class DoarioBackgroundService : BackgroundService
         }
     }
 
-    // ── Staff sync ────────────────────────────────────────────────────────────
-
     private async Task SyncStaffAsync(
         IServiceScope scope,
         Doario.Data.Models.SaaS.TenantInboxSettings settings,
@@ -386,26 +310,28 @@ public class DoarioBackgroundService : BackgroundService
         {
             var staffSyncService = scope.ServiceProvider.GetRequiredService<StaffSyncService>();
             var result = await staffSyncService.SyncAsync(settings.TenantId);
-
             if (result.Success)
             {
                 await inboxRepo.UpdateLastStaffSyncAtAsync(settings.TenantId, now);
-                _logger.LogInformation(
-                    "DoarioBackgroundService: staff sync complete for tenant {TenantId}. Added {Added}, Updated {Updated}",
+                _logger.LogInformation("DoarioBackgroundService: staff sync complete for {TenantId}. Added {Added}, Updated {Updated}",
                     settings.TenantId, result.Added, result.Updated);
             }
             else
             {
-                _logger.LogWarning(
-                    "DoarioBackgroundService: staff sync failed for tenant {TenantId}: {Error}",
+                _logger.LogWarning("DoarioBackgroundService: staff sync failed for {TenantId}: {Error}",
                     settings.TenantId, result.ErrorMessage);
             }
         }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex,
-                "DoarioBackgroundService: staff sync threw for tenant {TenantId}",
-                settings.TenantId);
-        }
+        catch (Exception ex) { _logger.LogError(ex, "DoarioBackgroundService: staff sync threw for {TenantId}", settings.TenantId); }
+    }
+
+    private static string SanitiseFileName(string input)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var clean = new string(input
+            .Where(c => !invalid.Contains(c) && c != ' ')
+            .Take(60)
+            .ToArray());
+        return string.IsNullOrWhiteSpace(clean) ? "document" : clean;
     }
 }

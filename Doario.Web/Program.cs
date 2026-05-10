@@ -131,6 +131,8 @@ public class Program
 
         builder.Services.AddSingleton<ProcessInboxQueue>();
 
+        builder.Services.AddSingleton<ScanConfirmQueue>();
+
         // ── Background Services ───────────────────────────────────────────────
         builder.Services.AddHostedService<DoarioBackgroundService>();
 

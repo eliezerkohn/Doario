@@ -18,6 +18,7 @@ public class IngestController : ControllerBase
     private readonly SharePointService _sharePointService;
     private readonly PdfService _pdfService;
     private readonly AiBatchSplitService _aiBatchSplitService;
+    private readonly ScanConfirmQueue _scanConfirmQueue;
 
     public IngestController(
         ITenantRepository tenantRepo,
@@ -26,7 +27,8 @@ public class IngestController : ControllerBase
         OcrService ocrService,
         SharePointService sharePointService,
         PdfService pdfService,
-        AiBatchSplitService aiBatchSplitService)
+        AiBatchSplitService aiBatchSplitService,
+        ScanConfirmQueue scanConfirmQueue)
     {
         _tenantRepo = tenantRepo;
         _documentRepo = documentRepo;
@@ -35,6 +37,7 @@ public class IngestController : ControllerBase
         _sharePointService = sharePointService;
         _pdfService = pdfService;
         _aiBatchSplitService = aiBatchSplitService;
+        _scanConfirmQueue = scanConfirmQueue;
     }
 
     // GET /api/ingest/health
@@ -53,7 +56,6 @@ public class IngestController : ControllerBase
     }
 
     // POST /api/ingest/scan
-    // Single document scan — all pages combined into one PDF, uploaded immediately.
     [HttpPost("scan")]
     public async Task<IActionResult> IngestScan([FromBody] IngestScanRequest request)
     {
@@ -107,11 +109,8 @@ public class IngestController : ControllerBase
     }
 
     // POST /api/ingest/scan-batch
-    // ── NEW FLOW ──────────────────────────────────────────────────────────────
-    // Receives all scanned pages.
-    // AI splits into document boundaries.
-    // Returns split preview to portal — NO SharePoint upload, NO DB record yet.
-    // Operator reviews, then calls scan-confirm to finalise.
+    // Receives all scanned pages, AI splits into document boundaries.
+    // Returns split preview — NO SharePoint upload yet.
     [HttpPost("scan-batch")]
     public async Task<IActionResult> IngestBatchScan([FromBody] IngestScanRequest request)
     {
@@ -128,11 +127,6 @@ public class IngestController : ControllerBase
 
         try
         {
-            // ── Step 1: OCR each page for AI boundary detection ───────────────
-            // Runs Azure Document Intelligence on each raw PNG image in parallel.
-            // Empty string = blank page (OCR returned nothing = blank sheet).
-            // Real text = content the AI uses to detect document boundaries.
-            // No SharePoint involved — images stay in memory.
             var ocrTasks = request.Pages.Select(p => _ocrService.OcrPageAsync(p));
             var pageTexts = (await Task.WhenAll(ocrTasks)).ToList();
 
@@ -149,13 +143,13 @@ public class IngestController : ControllerBase
 
                 return new
                 {
-                    tempId = Guid.NewGuid().ToString(),  // client-side ID only, no DB
+                    tempId = Guid.NewGuid().ToString(),
                     index = i,
                     pageStart = b.StartPage + 1,
                     pageEnd = b.StartPage + b.PageCount,
                     pageCount = b.PageCount,
-                    pages = docPages,                   // all base64 pages for this doc
-                    previewBase64 = docPages.FirstOrDefault(),  // first page as thumbnail
+                    pages = docPages,
+                    previewBase64 = docPages.FirstOrDefault(),
                 };
             }).ToList();
 
@@ -175,10 +169,7 @@ public class IngestController : ControllerBase
     }
 
     // POST /api/ingest/scan-confirm
-    // ── NEW ENDPOINT ──────────────────────────────────────────────────────────
-    // Called when operator clicks Confirm on one or all documents.
-    // Receives the confirmed pages for one document.
-    // Builds PDF → uploads to SharePoint → creates DB record → fires OCR.
+    // Legacy single-document confirm — kept for backwards compatibility.
     [HttpPost("scan-confirm")]
     public async Task<IActionResult> IngestScanConfirm([FromBody] IngestConfirmRequest request)
     {
@@ -238,11 +229,71 @@ public class IngestController : ControllerBase
         }
     }
 
+    // POST /api/ingest/scan-confirm-batch
+    // New server-side batch confirm — browser reload safe.
+    // Starts background job, returns immediately.
+    // Frontend polls scan-confirm-status every 2 seconds.
+    [HttpPost("scan-confirm-batch")]
+    public async Task<IActionResult> IngestScanConfirmBatch([FromBody] ScanConfirmBatchRequest request)
+    {
+        var apiKey = Request.Headers["X-Api-Key"].FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(apiKey))
+            return Unauthorized(new { error = "Missing API key." });
+
+        var tenant = await _tenantRepo.GetByApiKeyAsync(apiKey);
+        if (tenant == null)
+            return Unauthorized(new { error = "Invalid API key." });
+
+        if (request?.Documents == null || request.Documents.Count == 0)
+            return BadRequest(new { error = "No documents received." });
+
+        // Check if already running
+        var current = _scanConfirmQueue.GetStatus(tenant.TenantId);
+        if (current.IsRunning)
+            return Ok(new { alreadyRunning = true, message = "Confirmation already in progress." });
+
+        var started = _scanConfirmQueue.Start(tenant.TenantId, apiKey, request.Documents);
+
+        return Ok(new
+        {
+            started,
+            total = request.Documents.Count,
+            message = $"Started confirming {request.Documents.Count} documents in background.",
+        });
+    }
+
+    // GET /api/ingest/scan-confirm-status
+    // Poll this every 2 seconds to get live per-document progress.
+    [HttpGet("scan-confirm-status")]
+    public async Task<IActionResult> GetScanConfirmStatus()
+    {
+        var apiKey = Request.Headers["X-Api-Key"].FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(apiKey))
+            return Unauthorized(new { error = "Missing API key." });
+
+        var tenant = await _tenantRepo.GetByApiKeyAsync(apiKey);
+        if (tenant == null)
+            return Unauthorized(new { error = "Invalid API key." });
+
+        var status = _scanConfirmQueue.GetStatus(tenant.TenantId);
+
+        return Ok(new
+        {
+            status.IsRunning,
+            status.StartedAt,
+            documents = status.Documents.Select(d => new
+            {
+                d.TempId,
+                d.Index,
+                State = d.State.ToString(),
+                d.DocumentId,
+                d.SharePointUrl,
+                d.Error,
+            }),
+        });
+    }
+
     // POST /api/ingest/scan-replace
-    // Rescan an individual document — replaces its pages in the preview.
-    // No SharePoint involved — returns new pages to portal for re-review.
-    // Old document only deleted from SharePoint if it was already confirmed
-    // (i.e. has a sharePointUrl passed in the request).
     [HttpPost("scan-replace")]
     public async Task<IActionResult> IngestScanReplace([FromBody] IngestReplaceRequest request)
     {
@@ -259,20 +310,12 @@ public class IngestController : ControllerBase
 
         try
         {
-            // If this document was already confirmed and uploaded, delete the old file
             if (!string.IsNullOrWhiteSpace(request.OldSharePointUrl))
-            {
-                await _sharePointService.DeleteFileAsync(
-                    tenant.TenantId, request.OldSharePointUrl);
-            }
+                await _sharePointService.DeleteFileAsync(tenant.TenantId, request.OldSharePointUrl);
 
-            // If it had a DB record, delete that too
             if (request.OldDocumentId.HasValue && request.OldDocumentId.Value != Guid.Empty)
-            {
                 await _documentRepo.DeleteAsync(request.OldDocumentId.Value);
-            }
 
-            // Return new pages to portal — operator reviews before confirming again
             return Ok(new
             {
                 pages = request.Pages,
@@ -288,8 +331,6 @@ public class IngestController : ControllerBase
         }
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
-
     private async Task LogError(Guid tenantId, Exception ex)
     {
         try
@@ -304,11 +345,11 @@ public class IngestController : ControllerBase
                 CreatedAt = DateTime.UtcNow,
             });
         }
-        catch { /* never let logging block the response */ }
+        catch { }
     }
 }
 
-// ── Request models ────────────────────────────────────────────────
+// ── Request models ────────────────────────────────────────────────────────────
 
 public class IngestScanRequest
 {
@@ -322,6 +363,11 @@ public class IngestConfirmRequest
     public int DocumentIndex { get; set; }
     public int? PageStart { get; set; }
     public int? PageEnd { get; set; }
+}
+
+public class ScanConfirmBatchRequest
+{
+    public List<ScanConfirmRequest> Documents { get; set; } = new();
 }
 
 public class IngestReplaceRequest

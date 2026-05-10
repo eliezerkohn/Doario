@@ -64,7 +64,6 @@ const MailPortal = () => {
         let data = [];
 
         if (currentFolder === 'Checks') {
-            // Checks uses dedicated endpoint — returns only actual checks
             const r = await axios.get('/api/admin/checks');
             data = r.data;
             setHasMore(false);
@@ -87,7 +86,7 @@ const MailPortal = () => {
     // ── Silent poll ───────────────────────────────────────────────────────────
 
     const silentRefresh = useCallback(async (currentFolder) => {
-        if (currentFolder === 'Checks') return; // checks don't need polling
+        if (currentFolder === 'Checks') return;
 
         const statusIds = FOLDER_STATUS_MAP[currentFolder];
         let url = `/api/admin/queue?page=1&pageSize=${PAGE_SIZE}`;
@@ -165,8 +164,6 @@ const MailPortal = () => {
         loadDocs(folder, 1).finally(() => setLoading(false));
     }, [folder]); // eslint-disable-line
 
-    // ── Folder change handler ─────────────────────────────────────────────────
-
     const handleFolderChange = (f) => {
         if (f === folder) return;
         setFolder(f);
@@ -219,6 +216,15 @@ const MailPortal = () => {
         setSelected(prev => prev?.documentId === documentId ? null : prev);
         loadCounts();
     };
+
+    // Called when a check is removed via "Not a Check" — refreshes sidebar counts
+    // and removes the document from the Checks folder list if currently viewing it
+    const handleChecksChanged = useCallback(() => {
+        loadCounts();
+        if (folder === 'Checks' && selected) {
+            setDocs(prev => prev.filter(d => d.documentId !== selected.documentId));
+        }
+    }, [loadCounts, folder, selected]);
 
     const handleSelect = async (doc) => {
         setSelected(doc);
@@ -307,6 +313,7 @@ const MailPortal = () => {
                 localAssigned={localAssigned}
                 onStatusChanged={handleStatusChanged}
                 onDeleted={handleDeleted}
+                onChecksChanged={handleChecksChanged}
             />
 
             {assigningDoc && (

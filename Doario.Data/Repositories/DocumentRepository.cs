@@ -15,14 +15,12 @@ public class DocumentRepository : IDocumentRepository
 
     public async Task<Document> GetByIdAsync(Guid documentId, Guid tenantId)
         => await _db.Documents
-            .FirstOrDefaultAsync(d => d.DocumentId == documentId
-                                   && d.TenantId == tenantId);
+            .FirstOrDefaultAsync(d => d.DocumentId == documentId && d.TenantId == tenantId);
 
     public async Task<Document> GetByIdWithTenantAsync(Guid documentId, Guid tenantId)
         => await _db.Documents
             .Include(d => d.Tenant)
-            .FirstOrDefaultAsync(d => d.DocumentId == documentId
-                                   && d.TenantId == tenantId);
+            .FirstOrDefaultAsync(d => d.DocumentId == documentId && d.TenantId == tenantId);
 
     public async Task<List<Document>> GetQueueAsync(Guid tenantId, int page, int pageSize)
         => await _db.Documents
@@ -71,6 +69,13 @@ public class DocumentRepository : IDocumentRepository
             .ExecuteUpdateAsync(s => s.SetProperty(d => d.AiSummary, aiSummary));
     }
 
+    public async Task UpdateFileNameAsync(Guid documentId, string fileName)
+    {
+        await _db.Documents
+            .Where(d => d.DocumentId == documentId)
+            .ExecuteUpdateAsync(s => s.SetProperty(d => d.OriginalFileName, fileName));
+    }
+
     public async Task<Document> CreateAsync(Document document)
     {
         _db.Documents.Add(document);
@@ -84,32 +89,19 @@ public class DocumentRepository : IDocumentRepository
         if (doc is null) return;
 
         await _db.DocumentVieweds
-            .Where(x => x.DocumentId == documentId)
-            .ExecuteDeleteAsync();
-
+            .Where(x => x.DocumentId == documentId).ExecuteDeleteAsync();
         await _db.DocumentAiSuggestions
-            .Where(x => x.DocumentId == documentId)
-            .ExecuteDeleteAsync();
-
+            .Where(x => x.DocumentId == documentId).ExecuteDeleteAsync();
         await _db.DocumentDeliveries
-            .Where(x => x.DocumentAssignment.DocumentId == documentId)
-            .ExecuteDeleteAsync();
-
+            .Where(x => x.DocumentAssignment.DocumentId == documentId).ExecuteDeleteAsync();
         await _db.DocumentAssignments
-            .Where(x => x.DocumentId == documentId)
-            .ExecuteDeleteAsync();
-
+            .Where(x => x.DocumentId == documentId).ExecuteDeleteAsync();
         await _db.DocumentChecks
-            .Where(x => x.DocumentId == documentId)
-            .ExecuteDeleteAsync();
-
+            .Where(x => x.DocumentId == documentId).ExecuteDeleteAsync();
         await _db.DocumentFeedbacks
-            .Where(x => x.DocumentId == documentId)
-            .ExecuteDeleteAsync();
-
+            .Where(x => x.DocumentId == documentId).ExecuteDeleteAsync();
         await _db.DocumentMessages
-            .Where(x => x.DocumentId == documentId)
-            .ExecuteDeleteAsync();
+            .Where(x => x.DocumentId == documentId).ExecuteDeleteAsync();
 
         _db.Documents.Remove(doc);
         await _db.SaveChangesAsync();
@@ -130,8 +122,7 @@ public class DocumentRepository : IDocumentRepository
             .Include(d => d.Sender)
             .Where(d => d.TenantId == tenantId &&
                         d.Sender != null &&
-                        (d.Sender.DisplayName.Contains(q) ||
-                         d.Sender.Email.Contains(q)))
+                        (d.Sender.DisplayName.Contains(q) || d.Sender.Email.Contains(q)))
             .OrderByDescending(d => d.UploadedAt)
             .ToListAsync();
     }
@@ -145,8 +136,7 @@ public class DocumentRepository : IDocumentRepository
             {
                 DisplayName = s.DisplayName,
                 Email = s.Email,
-                DocumentCount = _db.Documents.Count(d =>
-                    d.TenantId == tenantId && d.SenderId == s.SenderId)
+                DocumentCount = _db.Documents.Count(d => d.TenantId == tenantId && d.SenderId == s.SenderId)
             })
             .Where(s => s.DocumentCount > 0)
             .OrderBy(s => s.DisplayName == string.Empty ? s.Email : s.DisplayName)
@@ -159,10 +149,6 @@ public class DocumentRepository : IDocumentRepository
                      && (d.AiSummary == null || d.AiSummary == ""))
             .ToListAsync();
 
-    /// <summary>
-    /// Returns true if a document with this filename already exists for the tenant.
-    /// Prevents duplicate processing when concurrent fetchers run.
-    /// </summary>
     public async Task<bool> ExistsByFileNameAsync(Guid tenantId, string fileName)
         => await _db.Documents
             .AnyAsync(d => d.TenantId == tenantId && d.OriginalFileName == fileName);

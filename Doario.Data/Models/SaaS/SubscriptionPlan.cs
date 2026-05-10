@@ -18,7 +18,7 @@ public class SubscriptionPlan
 
     /// <summary>
     /// Stripe Price ID for this plan.
-    /// Used when creating a subscription via Stripe on Day 18.
+    /// Used when creating a Stripe subscription for a tenant.
     /// </summary>
     [MaxLength(100)]
     public string StripePriceId { get; set; }
@@ -27,6 +27,20 @@ public class SubscriptionPlan
     public bool IsPublic { get; set; } = true;
 
     public int SortOrder { get; set; }
+
+    /// <summary>
+    /// When this pricing took effect.
+    /// </summary>
     public DateTime StartDate { get; set; } = DateTime.UtcNow;
+
+    /// <summary>
+    /// DateTime.MaxValue = currently active.
+    /// Set to UtcNow when a new price replaces this one.
+    /// </summary>
     public DateTime EndDate { get; set; } = DateTime.MaxValue;
+
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+
+    // Navigation
+    public ICollection<TenantSubscription> Subscriptions { get; set; }
 }

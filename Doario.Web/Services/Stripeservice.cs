@@ -10,13 +10,13 @@ namespace Doario.Web.Services;
 
 /// <summary>
 /// Wraps all Stripe API interactions for Doario metered billing.
+/// Pricing is always read from SubscriptionPlan — never snapshotted on TenantSubscription.
 /// </summary>
 public class StripeService
 {
     private readonly DoarioDataContext _db;
     private readonly IConfiguration _config;
     private readonly ILogger<StripeService> _logger;
-    private readonly string _meteredPriceId;
 
     public StripeService(DoarioDataContext db, IConfiguration config, ILogger<StripeService> logger)
     {
@@ -25,7 +25,6 @@ public class StripeService
         _logger = logger;
 
         StripeConfiguration.ApiKey = _config["Stripe:SecretKey"];
-        _meteredPriceId = _config["Stripe:MeteredPriceId"];
     }
 
     // -------------------------------------------------------------------------
@@ -67,8 +66,13 @@ public class StripeService
     public async Task<string> CreateMeteredSubscriptionAsync(Guid tenantId, Guid tenantSubscriptionId)
     {
         var tenantSubscription = await _db.TenantSubscriptions
+            .Include(s => s.SubscriptionPlan)
             .FirstOrDefaultAsync(s => s.TenantSubscriptionId == tenantSubscriptionId)
             ?? throw new InvalidOperationException($"TenantSubscription {tenantSubscriptionId} not found.");
+
+        if (string.IsNullOrEmpty(tenantSubscription.SubscriptionPlan?.StripePriceId))
+            throw new InvalidOperationException(
+                $"SubscriptionPlan {tenantSubscription.SubscriptionPlanId} has no StripePriceId configured.");
 
         var customerId = await EnsureCustomerAsync(tenantId);
 
@@ -78,7 +82,7 @@ public class StripeService
             Customer = customerId,
             Items = new List<SubscriptionItemOptions>
             {
-                new SubscriptionItemOptions { Price = _meteredPriceId }
+                new SubscriptionItemOptions { Price = tenantSubscription.SubscriptionPlan.StripePriceId }
             },
             Metadata = new Dictionary<string, string>
             {
@@ -126,13 +130,13 @@ public class StripeService
 
         var service = new SubscriptionItemUsageRecordService();
         await service.CreateAsync(
-            activeSubscription.StripeSubscriptionItemId,
-            new SubscriptionItemUsageRecordCreateOptions
-            {
-                Quantity = usage.Quantity,
-                Timestamp = usage.RecordedAt,
-                Action = "increment"
-            });
+     activeSubscription.StripeSubscriptionItemId,
+     new SubscriptionItemUsageRecordCreateOptions
+     {
+         Quantity = usage.Quantity,
+         Timestamp = usage.RecordedAt,
+         Action = "increment"
+     });
 
         await _db.TenantBillingUsages
             .Where(u => u.TenantBillingUsageId == tenantBillingUsageId)
@@ -140,9 +144,7 @@ public class StripeService
                 .SetProperty(u => u.ReportedToStripe, true)
                 .SetProperty(u => u.StripeUsageRecordId, "reported")
                 .SetProperty(u => u.ReportedAt, DateTime.UtcNow));
-
-        _logger.LogInformation(
-            "Reported usage to Stripe for tenant {TenantId}", usage.TenantId);
+        _logger.LogInformation("Reported usage to Stripe for tenant {TenantId}", usage.TenantId);
     }
 
     public async Task FlushPendingUsageAsync(Guid tenantId)
@@ -183,7 +185,6 @@ public class StripeService
 
     /// <summary>
     /// Returns the active redeemed promo for a tenant if one exists and is valid.
-    /// Joins TenantPromo → PromoCode to get discount rules.
     /// </summary>
     public async Task<PromoCode> GetActivePromoAsync(Guid tenantId)
     {
@@ -203,7 +204,6 @@ public class StripeService
 
     /// <summary>
     /// Validates and redeems a promo code for a tenant.
-    /// Returns the PromoCode if successful, throws if invalid.
     /// </summary>
     public async Task<PromoCode> RedeemPromoCodeAsync(Guid tenantId, string code)
     {
@@ -217,7 +217,6 @@ public class StripeService
                                    && p.ExpiresAt > now)
             ?? throw new InvalidOperationException("Promo code not found or expired.");
 
-        // Check max redemptions
         if (promoCode.MaxRedemptions > 0)
         {
             var redemptionCount = await _db.TenantPromos
@@ -227,19 +226,16 @@ public class StripeService
                 throw new InvalidOperationException("This promo code has reached its maximum number of uses.");
         }
 
-        // Check if tenant already redeemed this code
         var alreadyRedeemed = await _db.TenantPromos
             .AnyAsync(tp => tp.TenantId == tenantId && tp.PromoCodeId == promoCode.PromoCodeId);
 
         if (alreadyRedeemed)
             throw new InvalidOperationException("You have already redeemed this promo code.");
 
-        // Deactivate any existing active promos for this tenant
         await _db.TenantPromos
             .Where(tp => tp.TenantId == tenantId && tp.IsActive)
             .ExecuteUpdateAsync(s => s.SetProperty(tp => tp.IsActive, false));
 
-        // Create redemption
         _db.TenantPromos.Add(new TenantPromo
         {
             TenantPromoId = Guid.NewGuid(),
@@ -251,25 +247,26 @@ public class StripeService
 
         await _db.SaveChangesAsync();
 
-        _logger.LogInformation(
-            "Tenant {TenantId} redeemed promo code {Code}", tenantId, normalised);
+        _logger.LogInformation("Tenant {TenantId} redeemed promo code {Code}", tenantId, normalised);
 
         return promoCode;
     }
 
     /// <summary>
     /// Calculates the effective per-document charge after applying any active promo.
+    /// Pricing is read from SubscriptionPlan.
     /// </summary>
     public async Task<decimal> GetEffectiveDocPriceAsync(Guid tenantId)
     {
         var subscription = await _db.TenantSubscriptions
+            .Include(s => s.SubscriptionPlan)
             .Where(s => s.TenantId == tenantId && s.EndDate == DateTime.MaxValue)
             .OrderByDescending(s => s.StartDate)
             .FirstOrDefaultAsync();
 
-        if (subscription == null) return 0;
+        if (subscription?.SubscriptionPlan == null) return 0;
 
-        var basePrice = subscription.ExtraDocumentPrice;
+        var basePrice = subscription.SubscriptionPlan.ExtraDocumentPrice;
         var promo = await GetActivePromoAsync(tenantId);
 
         if (promo == null) return basePrice;
@@ -292,12 +289,15 @@ public class StripeService
     public async Task<BillingSummary> GetBillingSummaryAsync(Guid tenantId)
     {
         var subscription = await _db.TenantSubscriptions
+            .Include(s => s.SubscriptionPlan)
             .Where(s => s.TenantId == tenantId && s.EndDate == DateTime.MaxValue)
             .OrderByDescending(s => s.StartDate)
             .FirstOrDefaultAsync();
 
-        if (subscription == null)
+        if (subscription?.SubscriptionPlan == null)
             return new BillingSummary { HasSubscription = false };
+
+        var plan = subscription.SubscriptionPlan;
 
         var periodStart = new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1, 0, 0, 0, DateTimeKind.Utc);
         var periodEnd = periodStart.AddMonths(1);
@@ -312,17 +312,17 @@ public class StripeService
 
         var promo = await GetActivePromoAsync(tenantId);
         var promoFreeExtra = promo?.FreeDocCount ?? 0;
-        var includedDocs = subscription.IncludedDocuments + promoFreeExtra;
+        var includedDocs = plan.IncludedDocuments + promoFreeExtra;
         var billableDocs = Math.Max(0, totalDocsThisPeriod - includedDocs);
         var effectivePrice = await GetEffectiveDocPriceAsync(tenantId);
-        var estimatedCharge = subscription.MonthlyPrice + (billableDocs * effectivePrice);
+        var estimatedCharge = plan.MonthlyPrice + (billableDocs * effectivePrice);
 
         return new BillingSummary
         {
             HasSubscription = true,
-            PlanName = subscription.PlanName,
-            MonthlyPrice = subscription.MonthlyPrice,
-            IncludedDocuments = subscription.IncludedDocuments,
+            PlanName = plan.Name,
+            MonthlyPrice = plan.MonthlyPrice,
+            IncludedDocuments = plan.IncludedDocuments,
             PromoFreeDocCount = promoFreeExtra,
             TotalDocsThisPeriod = totalDocsThisPeriod,
             BillableDocs = billableDocs,
