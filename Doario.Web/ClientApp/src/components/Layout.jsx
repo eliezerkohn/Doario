@@ -1,9 +1,16 @@
-import React from 'react';
-import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import React, { useEffect, useState } from 'react';
+import { Link, Outlet, useLocation } from 'react-router-dom';
 
 const Layout = () => {
     const location = useLocation();
-    const navigate = useNavigate();
+    const [isAdmin, setIsAdmin] = useState(false);
+
+    useEffect(() => {
+        fetch('/api/billing/my-role')
+            .then(r => r.ok ? r.json() : null)
+            .then(d => { if (d?.isAdmin) setIsAdmin(true); })
+            .catch(() => { });
+    }, []);
 
     const isMailPortal = location.pathname.startsWith('/admin/queue');
 
@@ -13,6 +20,7 @@ const Layout = () => {
 
     const isSettings = location.pathname.startsWith('/settings');
     const isUpload = location.pathname.startsWith('/upload-test');
+    const isOperator = location.pathname.startsWith('/operator');
 
     return (
         <div style={S.shell}>
@@ -37,6 +45,14 @@ const Layout = () => {
                     }}>
                         Settings
                     </Link>
+                    {isAdmin && (
+                        <Link to="/operator" style={{
+                            ...S.navLink,
+                            ...(isOperator ? S.navLinkActive : {})
+                        }}>
+                            Operator
+                        </Link>
+                    )}
                     <Link to="/admin/queue" style={S.navBtnMailQueue}>
                         Mail Queue
                     </Link>

@@ -70,6 +70,7 @@ public class DoarioDataContext : DbContext
     public DbSet<TenantAiSettings> TenantAiSettings { get; set; }
     public DbSet<DocumentAiSuggestion> DocumentAiSuggestions { get; set; }
     public DbSet<PromoCode> PromoCodes { get; set; }
+    public DbSet<DocumentExtractionResult> DocumentExtractionResults { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -247,6 +248,27 @@ public class DoarioDataContext : DbContext
                 .HasForeignKey(x => x.TenantId)
                 .OnDelete(DeleteBehavior.Restrict);
             e.HasIndex(x => x.TenantId).IsUnique();
+        });
+
+        // ── DocumentExtractionResult ──────────────────────────────────────────
+        modelBuilder.Entity<DocumentExtractionResult>(e =>
+        {
+            e.HasKey(x => x.DocumentExtractionResultId);
+
+            e.Property(x => x.FieldName).IsRequired().HasMaxLength(200);
+            e.Property(x => x.FieldValue).HasMaxLength(2000);
+            e.Property(x => x.BoundingBox).HasMaxLength(100);
+            e.Property(x => x.CorrectedValue).HasMaxLength(2000);
+
+            e.HasOne(x => x.Document)
+                .WithMany()
+                .HasForeignKey(x => x.DocumentId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            e.HasOne(x => x.Tenant)
+                .WithMany()
+                .HasForeignKey(x => x.TenantId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<TenantBillingUsage>().ToTable("TenantBillingUsage");

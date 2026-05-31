@@ -143,14 +143,15 @@ public class ProcessInboxQueue
                         foreach (var attachment in attachments.Value)
                         {
                             if (attachment is not Microsoft.Graph.Models.FileAttachment fileAttachment) continue;
+
                             var ext = Path.GetExtension(fileAttachment.Name ?? "").ToLowerInvariant();
                             if (!allowedExtensions.Contains(ext)) continue;
+
                             var contentBytes = fileAttachment.ContentBytes;
                             if (contentBytes == null || contentBytes.Length == 0) continue;
 
                             var receivedTime = (message.ReceivedDateTime ?? DateTimeOffset.UtcNow)
                                 .ToString("yyyyMMdd_HHmmss");
-                            var prefix = inbox.IsFaxInbox ? "fax" : "email";
                             var baseName = SanitiseFileName(
                                 Path.GetFileNameWithoutExtension(fileAttachment.Name ?? "attachment"));
 
@@ -165,9 +166,15 @@ public class ProcessInboxQueue
                                 continue;
                             }
 
-                            using var stream = new MemoryStream(contentBytes);
-                            var sharePointUrl = await sharePointService.UploadDocumentAsync(
-                                tenant.TenantId, stream, fileName);
+                            // Upload then immediately release bytes from memory
+                            string sharePointUrl;
+                            using (var stream = new MemoryStream(contentBytes))
+                            {
+                                sharePointUrl = await sharePointService.UploadDocumentAsync(
+                                    tenant.TenantId, stream, fileName);
+                            }
+                            contentBytes = null;
+                            fileAttachment.ContentBytes = null;
 
                             var document = new Doario.Data.Models.Mail.Document
                             {

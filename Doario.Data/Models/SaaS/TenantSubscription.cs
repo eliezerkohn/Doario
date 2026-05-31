@@ -34,6 +34,22 @@ public class TenantSubscription
     [MaxLength(100)]
     public string StripeSubscriptionItemId { get; set; }
 
+    /// <summary>
+    /// Set when Stripe reports a failed payment. Cleared on successful payment.
+    /// </summary>
+    public DateTime? PaymentFailedAt { get; set; }
+
+    /// <summary>
+    /// Number of consecutive failed payment attempts.
+    /// Reset to 0 on successful payment.
+    /// </summary>
+    public int PaymentFailureCount { get; set; } = 0;
+
+    /// <summary>
+    /// Set when subscription is active and paying normally.
+    /// </summary>
+    public DateTime? LastPaymentAt { get; set; }
+
     public DateTime StartDate { get; set; } = DateTime.UtcNow;
     public DateTime EndDate { get; set; } = DateTime.MaxValue;
 }

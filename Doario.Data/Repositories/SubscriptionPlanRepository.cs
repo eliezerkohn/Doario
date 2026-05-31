@@ -12,10 +12,14 @@ public class SubscriptionPlanRepository : ISubscriptionPlanRepository
         _db = db;
     }
 
+    /// <summary>
+    /// Active = EndDate year is 9999 (open-ended).
+    /// Using year check instead of DateTime.MaxValue to handle seeder vs EF precision differences.
+    /// </summary>
     public async Task<List<SubscriptionPlan>> GetAllActiveAsync()
     {
         return await _db.SubscriptionPlans
-            .Where(p => p.IsActive && p.IsPublic && p.EndDate == DateTime.MaxValue)
+            .Where(p => p.IsActive && p.IsPublic && p.EndDate.Year == 9999)
             .OrderBy(p => p.SortOrder)
             .ToListAsync();
     }

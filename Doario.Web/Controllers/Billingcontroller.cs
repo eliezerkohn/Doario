@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Stripe;
+using Stripe.BillingPortal;
 
 namespace Doario.Web.Controllers;
 
@@ -139,6 +140,57 @@ public class BillingController : ControllerBase
         return Ok(new { stripeSubscriptionId = subscriptionId });
     }
 
+    // ── GET /api/billing/plans ────────────────────────────────────────────────
+
+    [HttpGet("plans")]
+    [AllowAnonymous]
+    public async Task<IActionResult> GetPlans()
+    {
+        var plans = await _db.SubscriptionPlans
+            .Where(p => p.IsActive && p.IsPublic && p.EndDate == DateTime.MaxValue)
+            .OrderBy(p => p.SortOrder)
+            .Select(p => new
+            {
+                p.SubscriptionPlanId,
+                p.Name,
+                p.Description,
+                p.MonthlyPrice,
+                p.IncludedDocuments,
+                p.ExtraDocumentPrice,
+                p.SortOrder
+            })
+            .ToListAsync();
+
+        return Ok(plans);
+    }
+
+    // ── POST /api/billing/customer-portal ────────────────────────────────────
+
+    [HttpPost("customer-portal")]
+    public async Task<IActionResult> CustomerPortal()
+    {
+        if (!_tenant.IsResolved) return Unauthorized();
+
+        try
+        {
+            var customerId = await _stripeService.EnsureCustomerAsync(_tenant.TenantId);
+
+            var service = new SessionService();
+            var session = await service.CreateAsync(new SessionCreateOptions
+            {
+                Customer = customerId,
+                ReturnUrl = $"{Request.Scheme}://{Request.Host}/settings/billing"
+            });
+
+            return Ok(new { url = session.Url });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to create Stripe customer portal session for tenant {TenantId}", _tenant.TenantId);
+            return StatusCode(500, new { error = "Failed to open billing portal." });
+        }
+    }
+
     // ── GET /api/billing/debug ────────────────────────────────────────────────
 
     [HttpGet("debug")]
@@ -176,33 +228,19 @@ public class BillingController : ControllerBase
             switch (stripeEvent.Type)
             {
                 case "invoice.payment_succeeded":
-                    var invoice = stripeEvent.Data.Object as Invoice;
-                    _logger.LogInformation(
-                        "Stripe invoice paid: {InvoiceId} customer {CustomerId} amount {Amount}",
-                        invoice?.Id, invoice?.CustomerId, invoice?.AmountPaid);
+                    await HandlePaymentSucceededAsync(stripeEvent.Data.Object as Invoice);
                     break;
 
                 case "invoice.payment_failed":
-                    var failedInvoice = stripeEvent.Data.Object as Invoice;
-                    _logger.LogWarning(
-                        "Stripe invoice payment FAILED: {InvoiceId} customer {CustomerId}",
-                        failedInvoice?.Id, failedInvoice?.CustomerId);
+                    await HandlePaymentFailedAsync(stripeEvent.Data.Object as Invoice);
                     break;
 
                 case "customer.subscription.deleted":
-                    var subscription = stripeEvent.Data.Object as Subscription;
-                    _logger.LogWarning(
-                        "Stripe subscription deleted: {SubId} customer {CustomerId}",
-                        subscription?.Id, subscription?.CustomerId);
+                    await HandleSubscriptionDeletedAsync(stripeEvent.Data.Object as Subscription);
+                    break;
 
-                    if (subscription != null)
-                    {
-                        await _db.TenantSubscriptions
-                            .Where(s => s.StripeSubscriptionId == subscription.Id
-                                     && s.EndDate == DateTime.MaxValue)
-                            .ExecuteUpdateAsync(s => s
-                                .SetProperty(x => x.EndDate, DateTime.UtcNow));
-                    }
+                case "customer.subscription.updated":
+                    await HandleSubscriptionUpdatedAsync(stripeEvent.Data.Object as Subscription);
                     break;
 
                 default:
@@ -217,6 +255,120 @@ public class BillingController : ControllerBase
             _logger.LogError(ex, "Stripe webhook signature validation failed.");
             return BadRequest();
         }
+    }
+
+    // ── WEBHOOK HANDLERS ──────────────────────────────────────────────────────
+
+    private async Task HandlePaymentSucceededAsync(Invoice invoice)
+    {
+        if (invoice == null) return;
+
+        var tenant = await _db.Tenants
+            .FirstOrDefaultAsync(t => t.StripeCustomerId == invoice.CustomerId);
+
+        if (tenant == null)
+        {
+            _logger.LogWarning("Stripe payment_succeeded: no tenant found for customer {CustomerId}", invoice.CustomerId);
+            return;
+        }
+
+        await _db.TenantSubscriptions
+            .Where(s => s.TenantId == tenant.TenantId
+                     && s.EndDate == DateTime.MaxValue)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(x => x.PaymentFailedAt, (DateTime?)null)
+                .SetProperty(x => x.PaymentFailureCount, 0)
+                .SetProperty(x => x.LastPaymentAt, DateTime.UtcNow));
+
+        _logger.LogInformation(
+            "Stripe payment succeeded for tenant {TenantId} invoice {InvoiceId} amount {Amount}",
+            tenant.TenantId, invoice.Id, invoice.AmountPaid);
+    }
+
+    private async Task HandlePaymentFailedAsync(Invoice invoice)
+    {
+        if (invoice == null) return;
+
+        var tenant = await _db.Tenants
+            .FirstOrDefaultAsync(t => t.StripeCustomerId == invoice.CustomerId);
+
+        if (tenant == null)
+        {
+            _logger.LogWarning("Stripe payment_failed: no tenant found for customer {CustomerId}", invoice.CustomerId);
+            return;
+        }
+
+        var subscription = await _db.TenantSubscriptions
+            .FirstOrDefaultAsync(s => s.TenantId == tenant.TenantId
+                                   && s.EndDate == DateTime.MaxValue);
+
+        if (subscription == null) return;
+
+        var newFailureCount = subscription.PaymentFailureCount + 1;
+
+        await _db.TenantSubscriptions
+            .Where(s => s.TenantSubscriptionId == subscription.TenantSubscriptionId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(x => x.PaymentFailedAt, DateTime.UtcNow)
+                .SetProperty(x => x.PaymentFailureCount, newFailureCount));
+
+        _logger.LogWarning(
+            "Stripe payment FAILED for tenant {TenantId} invoice {InvoiceId} attempt {Count}",
+            tenant.TenantId, invoice.Id, newFailureCount);
+    }
+
+    private async Task HandleSubscriptionDeletedAsync(Subscription subscription)
+    {
+        if (subscription == null) return;
+
+        var tenant = await _db.Tenants
+            .FirstOrDefaultAsync(t => t.StripeCustomerId == subscription.CustomerId);
+
+        if (tenant == null)
+        {
+            _logger.LogWarning("Stripe subscription.deleted: no tenant found for customer {CustomerId}", subscription.CustomerId);
+            return;
+        }
+
+        await _db.TenantSubscriptions
+            .Where(s => s.TenantId == tenant.TenantId
+                     && s.StripeSubscriptionId == subscription.Id
+                     && s.EndDate == DateTime.MaxValue)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(x => x.EndDate, DateTime.UtcNow));
+
+        _logger.LogWarning(
+            "Stripe subscription deleted for tenant {TenantId} subscription {SubId}",
+            tenant.TenantId, subscription.Id);
+    }
+
+    private async Task HandleSubscriptionUpdatedAsync(Subscription subscription)
+    {
+        if (subscription == null) return;
+
+        var tenant = await _db.Tenants
+            .FirstOrDefaultAsync(t => t.StripeCustomerId == subscription.CustomerId);
+
+        if (tenant == null)
+        {
+            _logger.LogWarning("Stripe subscription.updated: no tenant found for customer {CustomerId}", subscription.CustomerId);
+            return;
+        }
+
+        var newPriceId = subscription.Items?.Data?.FirstOrDefault()?.Price?.Id;
+        if (!string.IsNullOrEmpty(newPriceId))
+        {
+            await _db.TenantSubscriptions
+                .Where(s => s.TenantId == tenant.TenantId
+                         && s.StripeSubscriptionId == subscription.Id
+                         && s.EndDate == DateTime.MaxValue)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(x => x.StripePlanId, newPriceId));
+        }
+
+        _logger.LogInformation(
+            "Stripe subscription updated for tenant {TenantId} subscription {SubId}",
+            tenant.TenantId, subscription.Id);
     }
 }
 

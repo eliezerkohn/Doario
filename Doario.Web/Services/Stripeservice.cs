@@ -60,6 +60,49 @@ public class StripeService
     }
 
     // -------------------------------------------------------------------------
+    // PRICES
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Creates a Stripe product + monthly recurring price.
+    /// Called automatically when operator creates a plan.
+    /// Returns the Stripe price_... ID.
+    /// </summary>
+    public async Task<string> CreatePriceAsync(string planName, decimal monthlyPrice)
+    {
+        var productService = new ProductService();
+        var product = await productService.CreateAsync(new ProductCreateOptions
+        {
+            Name = $"Doario {planName}",
+            Metadata = new Dictionary<string, string>
+            {
+                { "Source", "Doario" },
+                { "PlanName", planName }
+            }
+        });
+
+        var priceService = new PriceService();
+        var price = await priceService.CreateAsync(new PriceCreateOptions
+        {
+            Currency = "usd",
+            UnitAmount = (long)(monthlyPrice * 100),
+            Recurring = new PriceRecurringOptions { Interval = "month" },
+            Product = product.Id,
+            Metadata = new Dictionary<string, string>
+            {
+                { "Source", "Doario" },
+                { "PlanName", planName }
+            }
+        });
+
+        _logger.LogInformation(
+            "Created Stripe price {PriceId} for plan {PlanName} at ${MonthlyPrice}/mo",
+            price.Id, planName, monthlyPrice);
+
+        return price.Id;
+    }
+
+    // -------------------------------------------------------------------------
     // SUBSCRIPTION
     // -------------------------------------------------------------------------
 
@@ -130,13 +173,13 @@ public class StripeService
 
         var service = new SubscriptionItemUsageRecordService();
         await service.CreateAsync(
-     activeSubscription.StripeSubscriptionItemId,
-     new SubscriptionItemUsageRecordCreateOptions
-     {
-         Quantity = usage.Quantity,
-         Timestamp = usage.RecordedAt,
-         Action = "increment"
-     });
+            activeSubscription.StripeSubscriptionItemId,
+            new SubscriptionItemUsageRecordCreateOptions
+            {
+                Quantity = usage.Quantity,
+                Timestamp = usage.RecordedAt,
+                Action = "increment"
+            });
 
         await _db.TenantBillingUsages
             .Where(u => u.TenantBillingUsageId == tenantBillingUsageId)
@@ -144,6 +187,7 @@ public class StripeService
                 .SetProperty(u => u.ReportedToStripe, true)
                 .SetProperty(u => u.StripeUsageRecordId, "reported")
                 .SetProperty(u => u.ReportedAt, DateTime.UtcNow));
+
         _logger.LogInformation("Reported usage to Stripe for tenant {TenantId}", usage.TenantId);
     }
 
@@ -183,9 +227,6 @@ public class StripeService
     // PROMOS
     // -------------------------------------------------------------------------
 
-    /// <summary>
-    /// Returns the active redeemed promo for a tenant if one exists and is valid.
-    /// </summary>
     public async Task<PromoCode> GetActivePromoAsync(Guid tenantId)
     {
         var now = DateTime.UtcNow;
@@ -202,9 +243,6 @@ public class StripeService
             .FirstOrDefaultAsync();
     }
 
-    /// <summary>
-    /// Validates and redeems a promo code for a tenant.
-    /// </summary>
     public async Task<PromoCode> RedeemPromoCodeAsync(Guid tenantId, string code)
     {
         var now = DateTime.UtcNow;
@@ -253,8 +291,64 @@ public class StripeService
     }
 
     /// <summary>
-    /// Calculates the effective per-document charge after applying any active promo.
-    /// Pricing is read from SubscriptionPlan.
+    /// Operator assigns a promo code directly to a tenant — no code entry needed.
+    /// </summary>
+    public async Task AssignPromoToTenantAsync(Guid tenantId, Guid promoCodeId)
+    {
+        var now = DateTime.UtcNow;
+
+        var promoCode = await _db.PromoCodes.FindAsync(promoCodeId)
+            ?? throw new InvalidOperationException($"PromoCode {promoCodeId} not found.");
+
+        await _db.TenantPromos
+            .Where(tp => tp.TenantId == tenantId && tp.IsActive)
+            .ExecuteUpdateAsync(s => s.SetProperty(tp => tp.IsActive, false));
+
+        _db.TenantPromos.Add(new TenantPromo
+        {
+            TenantPromoId = Guid.NewGuid(),
+            TenantId = tenantId,
+            PromoCodeId = promoCodeId,
+            IsActive = true,
+            CreatedAt = now
+        });
+
+        await _db.SaveChangesAsync();
+
+        _logger.LogInformation(
+            "Operator assigned promo {Code} to tenant {TenantId}", promoCode.Code, tenantId);
+    }
+
+    /// <summary>
+    /// Effective monthly base price after applying BaseDiscountPercent from promo
+    /// and DiscountPercent from TenantSubscription (negotiated discount).
+    /// </summary>
+    public async Task<decimal> GetEffectiveBasePriceAsync(Guid tenantId)
+    {
+        var subscription = await _db.TenantSubscriptions
+            .Include(s => s.SubscriptionPlan)
+            .Where(s => s.TenantId == tenantId && s.EndDate == DateTime.MaxValue)
+            .OrderByDescending(s => s.StartDate)
+            .FirstOrDefaultAsync();
+
+        if (subscription?.SubscriptionPlan == null) return 0;
+
+        var basePrice = subscription.SubscriptionPlan.MonthlyPrice;
+
+        // Apply negotiated discount from TenantSubscription
+        if (subscription.DiscountPercent > 0)
+            basePrice = Math.Max(0, basePrice * (1 - subscription.DiscountPercent / 100));
+
+        // Apply promo base discount on top
+        var promo = await GetActivePromoAsync(tenantId);
+        if (promo?.BaseDiscountPercent > 0)
+            basePrice = Math.Max(0, basePrice * (1 - promo.BaseDiscountPercent / 100));
+
+        return basePrice;
+    }
+
+    /// <summary>
+    /// Effective per-doc price after applying promo discount on extra docs.
     /// </summary>
     public async Task<decimal> GetEffectiveDocPriceAsync(Guid tenantId)
     {
@@ -314,25 +408,30 @@ public class StripeService
         var promoFreeExtra = promo?.FreeDocCount ?? 0;
         var includedDocs = plan.IncludedDocuments + promoFreeExtra;
         var billableDocs = Math.Max(0, totalDocsThisPeriod - includedDocs);
-        var effectivePrice = await GetEffectiveDocPriceAsync(tenantId);
-        var estimatedCharge = plan.MonthlyPrice + (billableDocs * effectivePrice);
+
+        var effectiveBasePrice = await GetEffectiveBasePriceAsync(tenantId);
+        var effectiveDocPrice = await GetEffectiveDocPriceAsync(tenantId);
+        var estimatedCharge = effectiveBasePrice + (billableDocs * effectiveDocPrice);
 
         return new BillingSummary
         {
             HasSubscription = true,
             PlanName = plan.Name,
             MonthlyPrice = plan.MonthlyPrice,
+            EffectiveMonthlyPrice = effectiveBasePrice,
             IncludedDocuments = plan.IncludedDocuments,
             PromoFreeDocCount = promoFreeExtra,
             TotalDocsThisPeriod = totalDocsThisPeriod,
             BillableDocs = billableDocs,
-            EffectiveDocPrice = effectivePrice,
+            EffectiveDocPrice = effectiveDocPrice,
             EstimatedCharge = estimatedCharge,
             PeriodStart = periodStart,
             PeriodEnd = periodEnd,
             UnreportedCount = unreportedCount,
             ActivePromoCode = promo?.Code,
             ActivePromoDescription = promo?.Description,
+            BaseDiscountPercent = promo?.BaseDiscountPercent ?? 0,
+            NegotiatedDiscountPercent = subscription.DiscountPercent,
             StripeSubscriptionId = subscription.StripeSubscriptionId
         };
     }
@@ -343,6 +442,7 @@ public class BillingSummary
     public bool HasSubscription { get; set; }
     public string PlanName { get; set; }
     public decimal MonthlyPrice { get; set; }
+    public decimal EffectiveMonthlyPrice { get; set; }
     public int IncludedDocuments { get; set; }
     public int PromoFreeDocCount { get; set; }
     public int TotalDocsThisPeriod { get; set; }
@@ -354,5 +454,7 @@ public class BillingSummary
     public int UnreportedCount { get; set; }
     public string ActivePromoCode { get; set; }
     public string ActivePromoDescription { get; set; }
+    public decimal BaseDiscountPercent { get; set; }
+    public decimal NegotiatedDiscountPercent { get; set; }
     public string StripeSubscriptionId { get; set; }
 }

@@ -19,13 +19,6 @@ const STATUS = {
     ERROR: 'error',
 };
 
-const STATE_ICON = {
-    Waiting: '⬜',
-    Processing: '⏳',
-    Done: '✅',
-    Failed: '❌',
-};
-
 // ── IndexedDB helpers ─────────────────────────────────────────────────────────
 
 const openDB = () => new Promise((resolve, reject) => {
@@ -65,6 +58,12 @@ const idbDelete = async (key) => {
     });
 };
 
+// Strip page data from a document — keep only metadata and first page preview
+const stripPages = (doc) => ({
+    ...doc,
+    pages: [],
+});
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function BatchScanPage() {
@@ -77,7 +76,6 @@ export default function BatchScanPage() {
     const [error, setError] = useState(null);
     const [batchScanId, setBatchScanId] = useState(null);
 
-    // Server-side confirm job state
     const [jobRunning, setJobRunning] = useState(false);
     const [jobDocs, setJobDocs] = useState([]);
     const [jobFinished, setJobFinished] = useState(false);
@@ -100,10 +98,11 @@ export default function BatchScanPage() {
         }).catch(() => { });
     }, []);
 
-    // ── Save session ──────────────────────────────────────────────────────────
+    // ── Save session — metadata only ──────────────────────────────────────────
     useEffect(() => {
         if (documents.length === 0) return;
-        idbSet(SESSION_KEY, { documents, batchScanId }).catch(() => { });
+        const slim = documents.map(d => stripPages(d));
+        idbSet(SESSION_KEY, { documents: slim, batchScanId }).catch(() => { });
     }, [documents, batchScanId]);
 
     useEffect(() => {
@@ -112,7 +111,8 @@ export default function BatchScanPage() {
 
     useEffect(() => {
         checkBridge(sessionRestored.current, false);
-        checkJobStatus(); // reconnect to any running job on mount
+        // Check once on mount if a job was already running (page reload reconnect)
+        checkJobStatusOnce();
     }, []);
 
     useEffect(() => {
@@ -153,17 +153,21 @@ export default function BatchScanPage() {
         }
     };
 
-    // ── Job polling ───────────────────────────────────────────────────────────
+    // ── Polling — starts once, never restarts itself ───────────────────────────
     const startPolling = () => {
-        if (pollRef.current) return;
-        pollRef.current = setInterval(checkJobStatus, 2000);
+        if (pollRef.current) return; // already polling — do nothing
+        pollRef.current = setInterval(pollJobStatus, 2000);
     };
 
     const stopPolling = () => {
-        if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+        if (pollRef.current) {
+            clearInterval(pollRef.current);
+            pollRef.current = null;
+        }
     };
 
-    const checkJobStatus = async () => {
+    // Called only from the interval — never starts new intervals
+    const pollJobStatus = async () => {
         try {
             const r = await axios.get(`${BRIDGE_URL}/scan-confirm-status`);
             const s = r.data;
@@ -171,41 +175,57 @@ export default function BatchScanPage() {
             setJobDocs(docs);
 
             if (s.isRunning) {
-                setJobRunning(true);
                 jobRunningRef.current = true;
-                startPolling();
-
-                // Update documents list with confirmed results as they come in
-                setDocuments(prev => prev.map(d => {
-                    const job = docs.find(j => j.tempId === d.tempId);
-                    if (!job) return d;
-                    if (job.state === 'Done')
-                        return { ...d, confirmed: true, confirming: false, documentId: job.documentId, sharePointUrl: job.sharePointUrl };
-                    if (job.state === 'Processing')
-                        return { ...d, confirming: true };
-                    if (job.state === 'Failed')
-                        return { ...d, confirming: false };
-                    return d;
-                }));
-            } else if (jobRunningRef.current && !s.isRunning) {
+                setJobRunning(true);
+                updateDocumentsFromJob(docs);
+            } else if (jobRunningRef.current) {
                 // Job just finished
-                setJobRunning(false);
                 jobRunningRef.current = false;
+                setJobRunning(false);
                 setJobFinished(true);
                 stopPolling();
-
-                // Final update — mark all done/failed
-                setDocuments(prev => prev.map(d => {
-                    const job = docs.find(j => j.tempId === d.tempId);
-                    if (!job) return d;
-                    if (job.state === 'Done')
-                        return { ...d, confirmed: true, confirming: false, documentId: job.documentId, sharePointUrl: job.sharePointUrl };
-                    if (job.state === 'Failed')
-                        return { ...d, confirming: false };
-                    return d;
-                }));
+                finalizeDocumentsFromJob(docs);
             }
         } catch { }
+    };
+
+    // Called once on mount to reconnect to any running job
+    const checkJobStatusOnce = async () => {
+        try {
+            const r = await axios.get(`${BRIDGE_URL}/scan-confirm-status`);
+            const s = r.data;
+            if (s.isRunning) {
+                jobRunningRef.current = true;
+                setJobRunning(true);
+                startPolling(); // start polling only if job is actually running
+            }
+        } catch { }
+    };
+
+    const updateDocumentsFromJob = (docs) => {
+        setDocuments(prev => prev.map(d => {
+            const job = docs.find(j => j.tempId === d.tempId);
+            if (!job) return d;
+            if (job.state === 'Done')
+                return { ...d, confirmed: true, confirming: false, documentId: job.documentId, sharePointUrl: job.sharePointUrl };
+            if (job.state === 'Processing')
+                return { ...d, confirming: true };
+            if (job.state === 'Failed')
+                return { ...d, confirming: false };
+            return d;
+        }));
+    };
+
+    const finalizeDocumentsFromJob = (docs) => {
+        setDocuments(prev => prev.map(d => {
+            const job = docs.find(j => j.tempId === d.tempId);
+            if (!job) return d;
+            if (job.state === 'Done')
+                return { ...d, confirmed: true, confirming: false, documentId: job.documentId, sharePointUrl: job.sharePointUrl };
+            if (job.state === 'Failed')
+                return { ...d, confirming: false };
+            return d;
+        }));
     };
 
     // ── Step 1: Scan ──────────────────────────────────────────────────────────
@@ -276,12 +296,11 @@ export default function BatchScanPage() {
         }
     };
 
-    // ── Confirm one document — server-side ────────────────────────────────────
+    // ── Confirm one document ──────────────────────────────────────────────────
     const handleConfirm = async (doc) => {
         if (doc.confirmed || doc.confirming) return;
         setError(null);
 
-        // Mark as confirming immediately
         setDocuments(prev => prev.map(d =>
             d.tempId === doc.tempId ? { ...d, confirming: true } : d
         ));
@@ -298,15 +317,18 @@ export default function BatchScanPage() {
                 }]
             });
 
-            if (r.data.alreadyRunning) {
-                startPolling();
-                return;
-            }
+            // Strip pages immediately after sending
+            setDocuments(prev => prev.map(d =>
+                d.tempId === doc.tempId ? stripPages({ ...d, confirming: true }) : d
+            ));
+            setSelected(prev =>
+                prev?.tempId === doc.tempId ? { ...stripPages(prev), confirming: true } : prev
+            );
 
-            setJobRunning(true);
             jobRunningRef.current = true;
+            setJobRunning(true);
             setJobFinished(false);
-            startPolling();
+            startPolling(); // start polling once
         } catch (err) {
             setDocuments(prev => prev.map(d =>
                 d.tempId === doc.tempId ? { ...d, confirming: false } : d
@@ -315,19 +337,18 @@ export default function BatchScanPage() {
         }
     };
 
-    // ── Confirm all — server-side ─────────────────────────────────────────────
+    // ── Confirm all ───────────────────────────────────────────────────────────
     const handleConfirmAll = async () => {
         const unconfirmed = documents.filter(d => !d.confirmed && !d.confirming);
         if (unconfirmed.length === 0) return;
         setError(null);
 
-        // Mark all as confirming
         setDocuments(prev => prev.map(d =>
             !d.confirmed ? { ...d, confirming: true } : d
         ));
 
         try {
-            const r = await axios.post(`${BRIDGE_URL}/scan-confirm-batch`, {
+            await axios.post(`${BRIDGE_URL}/scan-confirm-batch`, {
                 documents: unconfirmed.map(d => ({
                     tempId: d.tempId,
                     pages: d.pages,
@@ -338,15 +359,20 @@ export default function BatchScanPage() {
                 }))
             });
 
-            if (r.data.alreadyRunning) {
-                startPolling();
-                return;
-            }
+            // Strip pages immediately after sending
+            setDocuments(prev => prev.map(d =>
+                !d.confirmed ? stripPages({ ...d, confirming: true }) : d
+            ));
+            setSelected(prev =>
+                prev && !prev.confirmed
+                    ? { ...stripPages(prev), confirming: true }
+                    : prev
+            );
 
-            setJobRunning(true);
             jobRunningRef.current = true;
+            setJobRunning(true);
             setJobFinished(false);
-            startPolling();
+            startPolling(); // start polling once
         } catch (err) {
             setDocuments(prev => prev.map(d => ({ ...d, confirming: false })));
             setError(err.response?.data?.error || 'Save All failed.');
@@ -405,21 +431,19 @@ export default function BatchScanPage() {
 
     const handleDone = () => {
         clearSession();
+        stopPolling();
         setDocuments([]); setSelected(null); setBatchScanId(null);
         setError(null); sessionRestored.current = false;
         setJobDocs([]); setJobRunning(false); setJobFinished(false);
+        jobRunningRef.current = false;
         setStatus(STATUS.READY);
     };
 
     const allConfirmed = documents.length > 0 && documents.every(d => d.confirmed);
     const openSharePoint = (url) => window.open(url, '_blank');
 
-    // Get job state for a document
-    const getJobState = (tempId) => jobDocs.find(j => j.tempId === tempId);
-
     return (
         <div style={S.page}>
-            {/* Header */}
             <div style={S.header}>
                 <div style={S.headerLeft}>
                     <div style={S.title}>Scan Documents</div>
@@ -495,7 +519,6 @@ export default function BatchScanPage() {
                 </div>
             )}
 
-            {/* Results */}
             {status === STATUS.DONE && documents.length > 0 && (
                 <div style={S.results}>
                     <div style={S.docList}>
@@ -523,7 +546,6 @@ export default function BatchScanPage() {
                             </div>
                         </div>
 
-                       
                         {documents.map(doc => (
                             <div
                                 key={doc.tempId}
@@ -553,17 +575,16 @@ export default function BatchScanPage() {
                         ))}
                     </div>
 
-                    {/* Preview pane */}
                     {selected && (
                         <div style={S.preview}>
                             <div style={S.previewHeader}>
                                 <div style={S.previewTitle}>
                                     {selected.label}
-                                    <span style={S.previewPageCount}> — {selected.pages?.length ?? 1} page{(selected.pages?.length ?? 1) !== 1 ? 's' : ''}</span>
+                                    <span style={S.previewPageCount}> — {selected.pageRange}</span>
                                 </div>
                                 <div style={S.previewActions}>
                                     {!selected.confirmed && (
-                                        <button style={S.btnDelete} onClick={() => handleDelete(selected)} title="Remove this document">🗑 Delete</button>
+                                        <button style={S.btnDelete} onClick={() => handleDelete(selected)}>🗑 Delete</button>
                                     )}
                                     <button style={S.btnRescan} onClick={() => handleRescan(selected)}>↺ Rescan</button>
                                     {!selected.confirmed && (
@@ -584,14 +605,27 @@ export default function BatchScanPage() {
                             </div>
 
                             <div ref={previewRef} style={S.previewImageWrap}>
-                                {(selected.pages ?? []).map((p, i) => (
-                                    p ? (
+                                {selected.previewBase64 ? (
+                                    <div style={S.previewPageWrap}>
+                                        <div style={S.previewPageLabel}>Preview</div>
+                                        <img
+                                            src={`data:image/png;base64,${selected.previewBase64}`}
+                                            alt="Preview"
+                                            style={S.previewImage}
+                                        />
+                                        {selected.confirming && <div style={S.savingOverlay}>⏳ Saving to server…</div>}
+                                        {selected.confirmed && <div style={S.savedOverlay}>✓ Saved</div>}
+                                    </div>
+                                ) : selected.pages?.length > 0 ? (
+                                    selected.pages.map((p, i) => p ? (
                                         <div key={i} style={S.previewPageWrap}>
                                             <div style={S.previewPageLabel}>Page {i + 1}</div>
                                             <img src={`data:image/png;base64,${p}`} alt={`Page ${i + 1}`} style={S.previewImage} />
                                         </div>
-                                    ) : null
-                                ))}
+                                    ) : null)
+                                ) : (
+                                    <div style={{ color: '#9ca3af', fontSize: 13 }}>No preview available.</div>
+                                )}
                             </div>
 
                             <div style={S.previewMeta}>
@@ -661,10 +695,6 @@ const S = {
     btnRescanAll: { padding: '5px 10px', background: 'transparent', color: '#4a6478', border: '1px solid #d0dce6', borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' },
     allConfirmedBadge: { fontSize: 11, color: '#0d9488', fontWeight: 600 },
     btnDone: { padding: '5px 14px', background: '#0d9488', color: '#fff', border: 'none', borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' },
-    jobStatusWrap: { padding: '8px 14px', background: '#f0fdf4', borderBottom: '1px solid #bbf7d0', display: 'flex', flexDirection: 'column', gap: 4 },
-    jobStatusRow: { display: 'flex', alignItems: 'center', gap: 8, fontSize: 11 },
-    jobStatusLabel: { color: '#1a2e3b', fontWeight: 500 },
-    jobStatusError: { color: '#dc2626', fontSize: 10 },
     docItem: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: '1px solid #f0f4f7', cursor: 'pointer' },
     docItemLeft: { display: 'flex', alignItems: 'center', gap: 10 },
     docItemIcon: { fontSize: 16 },
@@ -684,9 +714,11 @@ const S = {
     btnConfirm: { padding: '7px 18px', background: '#0d9488', color: '#fff', border: 'none', borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' },
     spBtn: { padding: '7px 14px', background: 'transparent', color: '#0d9488', border: '1px solid #0d9488', borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' },
     previewImageWrap: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '24px', gap: 24, overflowY: 'auto' },
-    previewPageWrap: { display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%', maxWidth: 700 },
+    previewPageWrap: { display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%', maxWidth: 700, position: 'relative' },
     previewPageLabel: { fontSize: 11, color: '#7a9ab0', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '1px', marginBottom: 8, alignSelf: 'flex-start' },
     previewImage: { width: '100%', borderRadius: 8, boxShadow: '0 4px 20px rgba(0,0,0,0.1)', background: '#fff' },
+    savingOverlay: { marginTop: 8, fontSize: 12, color: '#7a9ab0', fontWeight: 500 },
+    savedOverlay: { marginTop: 8, fontSize: 12, color: '#0d9488', fontWeight: 600 },
     previewMeta: { padding: '16px 24px', background: '#fff', borderTop: '1px solid #e2eaef', display: 'flex', gap: 32, flexShrink: 0 },
     previewMetaItem: { display: 'flex', flexDirection: 'column', gap: 2 },
     metaLabel: { fontSize: 10, color: '#7a9ab0', textTransform: 'uppercase', letterSpacing: '1px' },

@@ -100,6 +100,11 @@ public class AdminController : ControllerBase
                 .ToArray();
         }
 
+        var checkDocIds = _db.DocumentChecks.Select(c => c.DocumentId);
+        var viewedDocIds = _db.DocumentVieweds
+            .Where(v => v.TenantId == tenantId)
+            .Select(v => v.DocumentId);
+
         var docs = await _db.Documents
             .Where(d => d.TenantId == tenantId)
             .Where(d => ids == null || ids.Contains(d.DocumentStatusId))
@@ -119,12 +124,10 @@ public class AdminController : ControllerBase
                 SenderEmail = d.Sender != null ? d.Sender.Email : string.Empty,
                 d.AiSummary,
                 d.SourceTypeId,
+                IsViewed = viewedDocIds.Contains(d.DocumentId),
+                IsCheck = checkDocIds.Contains(d.DocumentId),
             })
             .ToListAsync();
-
-        var docIds = docs.Select(d => d.DocumentId).ToList();
-        var viewedIds = await _viewed.GetViewedDocumentIdsAsync(tenantId, docIds);
-        var checkIds = await _checkRepo.GetDocumentIdsWithChecksAsync(tenantId);
 
         var result = docs.Select(d =>
         {
@@ -132,7 +135,7 @@ public class AdminController : ControllerBase
                 ? null
                 : Regex.Replace(d.AiSummary, "<[^>]*>", " ").Replace("  ", " ").Trim();
             if (snippet != null && snippet.Length > 100)
-                snippet = snippet.Substring(0, 100);
+                snippet = snippet[..100];
 
             return new
             {
@@ -146,8 +149,8 @@ public class AdminController : ControllerBase
                 d.SenderDisplayName,
                 d.SenderEmail,
                 d.SourceTypeId,
-                IsViewed = viewedIds.Contains(d.DocumentId),
-                IsCheck = checkIds.Contains(d.DocumentId),
+                d.IsViewed,
+                d.IsCheck,
                 AiSummarySnippet = snippet,
             };
         });

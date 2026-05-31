@@ -1,5 +1,6 @@
 ﻿using Doario.Data.Models.Mail;
 using Doario.Data.Repositories;
+using Microsoft.EntityFrameworkCore;
 
 namespace Doario.Web.Services;
 
@@ -7,6 +8,7 @@ namespace Doario.Web.Services;
 /// Singleton queue that processes scan confirmations server-side.
 /// Browser reloads don't affect processing — runs until all documents are saved.
 /// Each tenant gets its own job slot — keyed by tenantId.
+/// OCR runs directly on PNG pages in memory — avoids downloading PDF from SharePoint.
 /// </summary>
 public class ScanConfirmQueue
 {
@@ -99,6 +101,7 @@ public class ScanConfirmQueue
                 var sharePointService = scope.ServiceProvider.GetRequiredService<SharePointService>();
                 var pdfService = scope.ServiceProvider.GetRequiredService<PdfService>();
                 var ocrService = scope.ServiceProvider.GetRequiredService<OcrService>();
+                var aiQueue = scope.ServiceProvider.GetRequiredService<AiProcessingQueue>();
 
                 var tenant = await tenantRepo.GetByApiKeyAsync(apiKey);
                 if (tenant == null)
@@ -109,6 +112,7 @@ public class ScanConfirmQueue
 
                 var fileName = $"scan_{DateTime.UtcNow:yyyyMMdd_HHmmss}_{doc.Index + 1}.pdf";
 
+                // ── Step 1: Build PDF and upload to SharePoint for staff delivery ──
                 using var pdfStream = pdfService.BuildPdfStream(doc.Pages);
                 var sharePointUrl = await sharePointService.UploadDocumentAsync(
                     tenant.TenantId, pdfStream, fileName);
@@ -134,7 +138,66 @@ public class ScanConfirmQueue
                 };
 
                 await documentRepo.CreateAsync(document);
-                ocrService.RunInBackground(document.DocumentId);
+
+                // ── Step 2: OCR PNG pages directly in memory ──────────────────
+                // Avoids downloading the PDF from SharePoint and sending to Azure.
+                // Azure Document Intelligence accepts PNG natively via OcrPageAsync.
+                if (doc.Pages != null && doc.Pages.Count > 0)
+                {
+                    try
+                    {
+                        _logger.LogInformation(
+                            "ScanConfirmQueue: OCR-ing {Count} pages in memory for Document {DocId}",
+                            doc.Pages.Count, document.DocumentId);
+
+                        var pageTexts = new List<string>();
+                        foreach (var page in doc.Pages)
+                        {
+                            if (string.IsNullOrWhiteSpace(page)) continue;
+                            var pageText = await ocrService.OcrPageAsync(page);
+                            if (!string.IsNullOrWhiteSpace(pageText))
+                                pageTexts.Add(pageText);
+                        }
+
+                        var fullText = string.Join(Environment.NewLine + Environment.NewLine, pageTexts).Trim();
+
+                        if (!string.IsNullOrWhiteSpace(fullText))
+                        {
+                            await documentRepo.UpdateOcrTextAsync(document.DocumentId, fullText);
+
+                            _logger.LogInformation(
+                                "ScanConfirmQueue: OCR complete for Document {DocId}, {Chars} characters.",
+                                document.DocumentId, fullText.Length);
+
+                            // Record billing usage
+                            await RecordBillingUsageAsync(scope, tenant.TenantId, document.DocumentId);
+
+                            // Queue AI summary
+                            aiQueue.Enqueue(document.DocumentId);
+                        }
+                        else
+                        {
+                            _logger.LogWarning(
+                                "ScanConfirmQueue: OCR returned no text for Document {DocId}.",
+                                document.DocumentId);
+                            await documentRepo.UpdateStatusAsync(document.DocumentId, 5); // OcrFailed
+                        }
+                    }
+                    catch (Exception ocrEx)
+                    {
+                        _logger.LogError(ocrEx,
+                            "ScanConfirmQueue: OCR failed for Document {DocId}.", document.DocumentId);
+                        await documentRepo.UpdateStatusAsync(document.DocumentId, 5); // OcrFailed
+                    }
+                }
+                else
+                {
+                    // No pages in memory — fall back to background OCR from SharePoint
+                    _logger.LogWarning(
+                        "ScanConfirmQueue: No pages in memory for Document {DocId}, falling back to background OCR.",
+                        document.DocumentId);
+                    ocrService.RunInBackground(document.DocumentId);
+                }
 
                 SetState(job, doc.TempId, ScanConfirmState.Done,
                     documentId: document.DocumentId,
@@ -157,6 +220,38 @@ public class ScanConfirmQueue
 
         _logger.LogInformation(
             "ScanConfirmQueue: all documents processed for tenant {TenantId}", tenantId);
+    }
+
+    // ── Record one billable document usage event ──────────────────────────────
+
+    private async Task RecordBillingUsageAsync(IServiceScope scope, Guid tenantId, Guid documentId)
+    {
+        try
+        {
+            var db = scope.ServiceProvider.GetRequiredService<Doario.Data.DoarioDataContext>();
+
+            var alreadyRecorded = await db.TenantBillingUsages
+                .AnyAsync(u => u.DocumentId == documentId);
+
+            if (alreadyRecorded) return;
+
+            db.TenantBillingUsages.Add(new Doario.Data.Models.SaaS.TenantBillingUsage
+            {
+                TenantBillingUsageId = Guid.NewGuid(),
+                TenantId = tenantId,
+                DocumentId = documentId,
+                RecordedAt = DateTime.UtcNow,
+                ReportedToStripe = false,
+                Quantity = 1
+            });
+
+            await db.SaveChangesAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "ScanConfirmQueue: Failed to record billing usage for Document {Id}.", documentId);
+        }
     }
 
     private void SetState(ScanConfirmJob job, string tempId, ScanConfirmState state,

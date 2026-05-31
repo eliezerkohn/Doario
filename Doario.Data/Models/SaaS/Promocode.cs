@@ -26,6 +26,13 @@ public class PromoCode
     public string Description { get; set; }
 
     /// <summary>
+    /// Percentage discount applied to the monthly base price.
+    /// 0 = no base price discount.
+    /// e.g. 20 = 20% off the monthly plan price.
+    /// </summary>
+    public decimal BaseDiscountPercent { get; set; } = 0;
+
+    /// <summary>
     /// Percentage discount applied to the per-document charge.
     /// 0 = no percentage discount.
     /// Takes priority over FlatDiscountPerDoc.

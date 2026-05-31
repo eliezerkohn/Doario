@@ -96,6 +96,7 @@ public class EmailDeliveryService
                 $"{assignment.AssignedToStaff.FirstName} {assignment.AssignedToStaff.LastName}".Trim(),
                 BuildSubject(document),
                 BuildDeliveryBody(document, assignment, baseUrl),
+                BuildAdaptiveCard(document, assignment, baseUrl),
                 attachments);
 
             delivery.SystemStatusId = 8; // Sent
@@ -124,10 +125,6 @@ public class EmailDeliveryService
 
     // ── Retry delivery ────────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Re-sends an existing DocumentDelivery that previously failed.
-    /// Called by EmailRetryService — throws on failure so retry logic can track count.
-    /// </summary>
     public async Task RetryDeliveryAsync(DocumentDelivery delivery)
     {
         if (delivery.Document == null)
@@ -138,16 +135,12 @@ public class EmailDeliveryService
 
         var tenant = await _tenants.GetByIdAsync(delivery.TenantId);
         if (tenant == null)
-            throw new InvalidOperationException(
-                $"Tenant {delivery.TenantId} not found.");
+            throw new InvalidOperationException($"Tenant {delivery.TenantId} not found.");
 
         if (string.IsNullOrEmpty(tenant.MailboxAddress))
-            throw new InvalidOperationException(
-                $"Tenant {delivery.TenantId} has no MailboxAddress.");
+            throw new InvalidOperationException($"Tenant {delivery.TenantId} has no MailboxAddress.");
 
         var baseUrl = _config["Doario:BaseUrl"] ?? "https://doario.com";
-
-        // Re-fetch assignment for token and note
         var assignment = delivery.DocumentAssignment;
 
         List<Attachment> attachments = new();
@@ -172,9 +165,10 @@ public class EmailDeliveryService
         await SendGraphEmailAsync(
             tenant.MailboxAddress,
             delivery.SentToEmail,
-            delivery.SentToEmail, // display name not critical on retry
+            delivery.SentToEmail,
             BuildSubject(document),
             BuildDeliveryBody(document, assignment, baseUrl),
+            BuildAdaptiveCard(document, assignment, baseUrl),
             attachments);
 
         _logger.LogInformation(
@@ -233,6 +227,75 @@ public class EmailDeliveryService
         }
     }
 
+    // ── Promo email ───────────────────────────────────────────────────────────
+
+    public async Task<(bool Success, string Error)> SendPromoEmailAsync(
+        string toEmail,
+        string toName,
+        string tenantName,
+        string promoCode,
+        string promoDescription,
+        decimal? discountPercent,
+        decimal? flatDiscountPerDoc,
+        int? freeDocCount)
+    {
+        var fromAddress = _config["SystemEmail:FromAddress"]
+            ?? throw new InvalidOperationException("SystemEmail:FromAddress not configured.");
+        var fromName = _config["SystemEmail:FromName"] ?? "Doario";
+
+        try
+        {
+            var message = new Message
+            {
+                Subject = $"A special offer for {Enc(tenantName)} from Doario",
+                Body = new ItemBody
+                {
+                    ContentType = BodyType.Html,
+                    Content = BuildPromoEmailBody(
+                        toName, tenantName, promoCode, promoDescription,
+                        discountPercent, flatDiscountPerDoc, freeDocCount)
+                },
+                ToRecipients = new List<Recipient>
+                {
+                    new Recipient
+                    {
+                        EmailAddress = new EmailAddress
+                        {
+                            Address = toEmail,
+                            Name = toName
+                        }
+                    }
+                },
+                From = new Recipient
+                {
+                    EmailAddress = new EmailAddress
+                    {
+                        Address = fromAddress,
+                        Name = fromName
+                    }
+                }
+            };
+
+            await _graph.Users[fromAddress]
+                .SendMail
+                .PostAsync(new Microsoft.Graph.Users.Item.SendMail.SendMailPostRequestBody
+                {
+                    Message = message,
+                    SaveToSentItems = false
+                });
+
+            _logger.LogInformation(
+                "Promo email sent to {Email} with code {Code}", toEmail, promoCode);
+
+            return (true, string.Empty);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to send promo email to {Email}", toEmail);
+            return (false, ex.Message);
+        }
+    }
+
     // ── Shared Graph send ─────────────────────────────────────────────────────
 
     private async Task SendGraphEmailAsync(
@@ -241,15 +304,24 @@ public class EmailDeliveryService
         string toDisplayName,
         string subject,
         string htmlBody,
+        string adaptiveCardJson,
         List<Attachment> attachments)
     {
+        // Embed Adaptive Card as a hidden script tag in the HTML body.
+        // Outlook detects the application/adaptivecard+json script and renders
+        // native action buttons. Non-Outlook clients see only the HTML body.
+        var fullBody = $@"{htmlBody}
+<script type=""application/adaptivecard+json"">
+{adaptiveCardJson}
+</script>";
+
         var message = new Message
         {
             Subject = subject,
             Body = new ItemBody
             {
                 ContentType = BodyType.Html,
-                Content = htmlBody
+                Content = fullBody
             },
             ToRecipients = new List<Recipient>
             {
@@ -285,6 +357,121 @@ public class EmailDeliveryService
             });
     }
 
+    // ── Adaptive Card builder ─────────────────────────────────────────────────
+
+    /// <summary>
+    /// Builds an Outlook Adaptive Card JSON with native action buttons.
+    /// Outlook renders these as interactive buttons directly in the email.
+    /// Non-Outlook clients fall back to the HTML body links.
+    /// Works within the same M365 tenant without any registration.
+    /// </summary>
+    private static string BuildAdaptiveCard(
+        Document document,
+        DocumentAssignment assignment,
+        string baseUrl)
+    {
+        var token = assignment.StaffAccessToken;
+        var docId = document.DocumentId;
+
+        var actionUrl = $"{baseUrl}/api/staff-action/action/{docId}/{token}";
+        var verifyUrl = $"{baseUrl}/api/staff-action/verify/{docId}/{token}";
+        var noteUrl = $"{baseUrl}/api/staff-action/note/{docId}/{token}";
+        var forwardUrl = $"{baseUrl}/api/staff-action/forward/{docId}/{token}";
+        var viewUrl = document.SharePointUrl;
+
+        var senderName = !string.IsNullOrWhiteSpace(document.Sender?.DisplayName)
+            ? document.Sender.DisplayName
+            : "Unknown Sender";
+
+        var summaryPlain = string.IsNullOrWhiteSpace(document.AiSummary)
+            ? "AI summary not yet available."
+            : System.Text.RegularExpressions.Regex
+                .Replace(document.AiSummary, "<.*?>", string.Empty).Trim();
+
+        if (summaryPlain.Length > 200)
+            summaryPlain = summaryPlain[..200] + "…";
+
+        // Escape for JSON
+        var safeFileName = EscJson(document.OriginalFileName);
+        var safeSender = EscJson(senderName);
+        var safeSummary = EscJson(summaryPlain);
+        var safeDate = document.UploadedAt.ToString("dddd, MMMM d, yyyy h:mm tt") + " UTC";
+
+        return $$"""
+{
+  "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+  "type": "AdaptiveCard",
+  "version": "1.4",
+  "hideOriginalBody": false,
+  "body": [
+    {
+      "type": "Container",
+      "style": "emphasis",
+      "items": [
+        {
+          "type": "TextBlock",
+          "text": "📬 New Mail Item",
+          "weight": "Bolder",
+          "size": "Medium",
+          "color": "Accent"
+        }
+      ]
+    },
+    {
+      "type": "FactSet",
+      "facts": [
+        { "title": "From",     "value": "{{safeSender}}" },
+        { "title": "File",     "value": "{{safeFileName}}" },
+        { "title": "Received", "value": "{{safeDate}}" }
+      ]
+    },
+    {
+      "type": "TextBlock",
+      "text": "Summary",
+      "weight": "Bolder",
+      "size": "Small",
+      "spacing": "Medium"
+    },
+    {
+      "type": "TextBlock",
+      "text": "{{safeSummary}}",
+      "wrap": true,
+      "size": "Small",
+      "color": "Default"
+    }
+  ],
+  "actions": [
+    {
+      "type": "Action.OpenUrl",
+      "title": "✅ Mark as Actioned",
+      "url": "{{actionUrl}}",
+      "style": "positive"
+    },
+    {
+      "type": "Action.OpenUrl",
+      "title": "🔍 Verify Extraction",
+      "url": "{{verifyUrl}}"
+    },
+    {
+      "type": "Action.OpenUrl",
+      "title": "💬 Add Note",
+      "url": "{{noteUrl}}"
+    },
+    {
+      "type": "Action.OpenUrl",
+      "title": "↗ Forward",
+      "url": "{{forwardUrl}}"
+    },
+    {
+      "type": "Action.OpenUrl",
+      "title": "📄 View in SharePoint",
+      "url": "{{viewUrl}}"
+    }
+  ]
+}
+""";
+    }
+
     // ── Subject ───────────────────────────────────────────────────────────────
 
     private static string BuildSubject(Document document)
@@ -311,9 +498,10 @@ public class EmailDeliveryService
     {
         var token = assignment.StaffAccessToken;
         var docId = document.DocumentId;
-        var actionUrl = $"{baseUrl}/action/{docId}/{token}";
-        var forwardUrl = $"{baseUrl}/forward/{docId}/{token}";
-        var noteUrl = $"{baseUrl}/note/{docId}/{token}";
+        var actionUrl = $"{baseUrl}/api/staff-action/action/{docId}/{token}";
+        var forwardUrl = $"{baseUrl}/api/staff-action/forward/{docId}/{token}";
+        var noteUrl = $"{baseUrl}/api/staff-action/note/{docId}/{token}";
+        var verifyUrl = $"{baseUrl}/api/staff-action/verify/{docId}/{token}";
         var viewUrl = document.SharePointUrl;
 
         var senderName = !string.IsNullOrWhiteSpace(document.Sender?.DisplayName)
@@ -372,6 +560,9 @@ public class EmailDeliveryService
           <a href=""{actionUrl}"" style=""display:inline-block;background:#16a34a;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;font-size:14px;font-weight:600;"">✅ Mark as Actioned</a>
         </td>
         <td style=""padding-right:8px;"">
+          <a href=""{verifyUrl}"" style=""display:inline-block;background:#0369a1;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;font-size:14px;font-weight:600;"">🔍 Verify Extraction</a>
+        </td>
+        <td style=""padding-right:8px;"">
           <a href=""{forwardUrl}"" style=""display:inline-block;background:#2563eb;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;font-size:14px;font-weight:600;"">↗ Forward</a>
         </td>
         <td>
@@ -385,8 +576,67 @@ public class EmailDeliveryService
     <hr style=""border:none;border-top:1px solid #e5e7eb;margin:24px 0 16px;"">
     <p style=""font-size:11px;color:#9ca3af;margin:0;"">
       This message was delivered by your organisation's mail digitisation system.
-      The attached document is for your reference — drag it directly into any portal upload field.
       Action links expire in 30 days. Do not forward this email — action links are personal to you.
+    </p>
+  </div>
+</body></html>";
+    }
+
+    // ── Promo email body ──────────────────────────────────────────────────────
+
+    private static string BuildPromoEmailBody(
+        string toName,
+        string tenantName,
+        string promoCode,
+        string promoDescription,
+        decimal? discountPercent,
+        decimal? flatDiscountPerDoc,
+        int? freeDocCount)
+    {
+        var benefitLines = new List<string>();
+        if (discountPercent > 0)
+            benefitLines.Add($"<li>{discountPercent}% discount on extra document charges</li>");
+        if (flatDiscountPerDoc > 0)
+            benefitLines.Add($"<li>${flatDiscountPerDoc:F4} off per extra document</li>");
+        if (freeDocCount > 0)
+            benefitLines.Add($"<li>{freeDocCount} bonus free documents per month</li>");
+
+        var benefitsHtml = benefitLines.Any()
+            ? $"<ul style=\"margin:12px 0;padding-left:20px;font-size:14px;color:#374151;\">{string.Join("", benefitLines)}</ul>"
+            : string.Empty;
+
+        var greeting = string.IsNullOrWhiteSpace(toName) ? "Hello" : $"Hello {Enc(toName)}";
+
+        return $@"<!DOCTYPE html>
+<html><head><meta charset=""utf-8""></head>
+<body style=""font-family:Segoe UI,Arial,sans-serif;color:#1f2937;max-width:600px;margin:0 auto;padding:24px;"">
+  <div style=""background:#0f2d4a;padding:24px;border-radius:10px 10px 0 0;text-align:center;"">
+    <div style=""font-size:22px;font-weight:800;color:#fff;letter-spacing:-0.5px;"">
+      Do<span style=""color:#99e0d9;"">a</span>rio
+    </div>
+    <div style=""font-size:13px;color:rgba(255,255,255,0.6);margin-top:4px;"">Mail Digitisation</div>
+  </div>
+  <div style=""background:#f9fafb;padding:32px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 10px 10px;"">
+    <p style=""font-size:15px;margin:0 0 16px;"">{greeting},</p>
+    <p style=""font-size:14px;color:#374151;margin:0 0 24px;line-height:1.6;"">
+      We have a special offer for <strong>{Enc(tenantName)}</strong>.
+      As a valued Doario customer, we are applying an exclusive promo to your account.
+    </p>
+    {(!string.IsNullOrWhiteSpace(promoDescription) ? $"<p style=\"font-size:14px;color:#374151;margin:0 0 20px;\">{Enc(promoDescription)}</p>" : "")}
+    {(benefitsHtml.Length > 0 ? $"<div style=\"margin:0 0 24px;\"><strong style=\"font-size:13px;color:#0f2d4a;\">What you get:</strong>{benefitsHtml}</div>" : "")}
+    <div style=""text-align:center;margin:28px 0;"">
+      <div style=""font-size:12px;color:#6b7280;margin-bottom:8px;font-weight:600;text-transform:uppercase;letter-spacing:1px;"">Your Promo Code</div>
+      <div style=""display:inline-block;background:#0f2d4a;color:#99e0d9;font-size:24px;font-weight:800;
+                  padding:16px 32px;border-radius:10px;letter-spacing:4px;font-family:monospace;"">
+        {Enc(promoCode)}
+      </div>
+    </div>
+    <p style=""font-size:13px;color:#6b7280;text-align:center;margin:0 0 24px;"">
+      Enter this code in your Doario portal under Settings → Billing to apply it to your account.
+    </p>
+    <hr style=""border:none;border-top:1px solid #e5e7eb;margin:24px 0 16px;"">
+    <p style=""font-size:11px;color:#9ca3af;margin:0;text-align:center;"">
+      This email was sent by Doario. If you have questions, reply to this email.
     </p>
   </div>
 </body></html>";
@@ -430,6 +680,13 @@ public class EmailDeliveryService
   </div>
 </body></html>";
 
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
     private static string Enc(string value) =>
         string.IsNullOrEmpty(value) ? string.Empty : System.Net.WebUtility.HtmlEncode(value);
+
+    private static string EscJson(string value) =>
+        string.IsNullOrEmpty(value) ? string.Empty :
+        value.Replace("\\", "\\\\").Replace("\"", "\\\"")
+             .Replace("\r", "\\r").Replace("\n", "\\n");
 }

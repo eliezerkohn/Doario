@@ -1,4 +1,5 @@
-﻿using System.Security.Claims;
+﻿using System.Collections.Concurrent;
+using System.Security.Claims;
 using Doario.Data;
 using Microsoft.EntityFrameworkCore;
 
@@ -7,6 +8,10 @@ namespace Doario.Web.Middleware;
 public class TenantResolutionMiddleware : IMiddleware
 {
     private readonly DoarioDataContext _db;
+
+    // Cache tenant lookups in memory — keyed by domain
+    // Tenants don't change at runtime so this is safe to cache indefinitely
+    private static readonly ConcurrentDictionary<string, (Guid TenantId, string Name)?> _cache = new();
 
     public TenantResolutionMiddleware(DoarioDataContext db)
     {
@@ -27,15 +32,25 @@ public class TenantResolutionMiddleware : IMiddleware
 
                 if (!string.IsNullOrEmpty(domain))
                 {
-                    var tenant = await _db.Tenants
-                        .Where(t => t.Domain == domain)
-                        .Select(t => new { t.TenantId, t.Name })
-                        .FirstOrDefaultAsync();
-
-                    if (tenant is not null)
+                    // Check cache first — only hit DB on first request per domain
+                    if (!_cache.TryGetValue(domain, out var cached))
                     {
-                        context.Items["TenantId"] = tenant.TenantId;
-                        context.Items["TenantName"] = tenant.Name;
+                        var tenant = await _db.Tenants
+                            .Where(t => t.Domain == domain)
+                            .Select(t => new { t.TenantId, t.Name })
+                            .FirstOrDefaultAsync();
+
+                        cached = tenant is not null
+                            ? (tenant.TenantId, tenant.Name)
+                            : null;
+
+                        _cache[domain] = cached;
+                    }
+
+                    if (cached.HasValue)
+                    {
+                        context.Items["TenantId"] = cached.Value.TenantId;
+                        context.Items["TenantName"] = cached.Value.Name;
                     }
                 }
             }

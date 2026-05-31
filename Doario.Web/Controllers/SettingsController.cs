@@ -180,17 +180,18 @@ public class SettingsController : ControllerBase
         if (!_tenant.IsResolved) return Unauthorized();
         var sub = await _subRepo.GetActiveForTenantAsync(_tenant.TenantId);
         if (sub == null) return Ok(null);
+        var plan = sub.SubscriptionPlan;
         var now = DateTime.UtcNow;
         var docsUsed = await _docRepo.GetMonthlyCountAsync(_tenant.TenantId, now.Year, now.Month);
         return Ok(new
         {
-            sub.PlanName,
-            sub.MonthlyPrice,
-            sub.IncludedDocuments,
-            sub.ExtraDocumentPrice,
+            planName = plan?.Name,
+            monthlyPrice = plan?.MonthlyPrice,
+            includedDocuments = plan?.IncludedDocuments,
+            extraDocumentPrice = plan?.ExtraDocumentPrice,
             sub.DiscountPercent,
             sub.StartDate,
-            DocumentsUsed = docsUsed,
+            documentsUsed = docsUsed,
         });
     }
 
@@ -410,8 +411,6 @@ public class SettingsController : ControllerBase
         return Ok(stats);
     }
 
-    // POST /api/settings/monitored-inboxes/{id}/process-now
-    // Uses ProcessInboxQueue — server-side, browser reload safe
     [HttpPost("monitored-inboxes/{id:guid}/process-now")]
     public async Task<IActionResult> ProcessInboxNow(Guid id)
     {
@@ -430,8 +429,6 @@ public class SettingsController : ControllerBase
         return Ok(new { started, message = "Processing triggered." });
     }
 
-    // POST /api/settings/process-inbox
-    // Starts background job for ALL active inboxes — browser reload safe
     [HttpPost("process-inbox")]
     public async Task<IActionResult> ProcessAllInboxesNow()
     {
@@ -459,8 +456,6 @@ public class SettingsController : ControllerBase
         });
     }
 
-    // GET /api/settings/process-inbox-status
-    // Poll every 2 seconds for live per-inbox progress
     [HttpGet("process-inbox-status")]
     public IActionResult GetProcessInboxStatus()
     {

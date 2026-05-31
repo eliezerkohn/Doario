@@ -11,16 +11,21 @@ public class AiSummaryService
 {
     private readonly IConfiguration _config;
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly ILogger<AiSummaryService> _logger;
 
     // Valid email regex — rejects URLs, payment portals, web addresses
     private static readonly Regex ValidEmailRegex = new(
         @"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$",
         RegexOptions.Compiled);
 
-    public AiSummaryService(IConfiguration config, IServiceScopeFactory scopeFactory)
+    public AiSummaryService(
+        IConfiguration config,
+        IServiceScopeFactory scopeFactory,
+        ILogger<AiSummaryService> logger)
     {
         _config = config;
         _scopeFactory = scopeFactory;
+        _logger = logger;
     }
 
     public void RunInBackground(Guid documentId)
@@ -42,6 +47,7 @@ public class AiSummaryService
             var staffRepo = scope.ServiceProvider.GetRequiredService<IStaffRepository>();
             var aiSettingsRepo = scope.ServiceProvider.GetRequiredService<ITenantAiSettingsRepository>();
             var aiAssignmentService = scope.ServiceProvider.GetRequiredService<AiAssignmentService>();
+            var extractionResultRepo = scope.ServiceProvider.GetRequiredService<IDocumentExtractionResultRepository>();
 
             var doc = await documents.GetByIdAsync(documentId);
             if (doc is null || string.IsNullOrWhiteSpace(doc.OcrText)) return;
@@ -63,6 +69,8 @@ public class AiSummaryService
                 "If there is any doubt, return no for IS_CHECK and UNKNOWN for the rest.";
 
             var extractionFieldsBlock = string.Empty;
+            var extractionFieldLines = new List<string>();
+
             if (extractionFields.Any())
             {
                 var fieldLines = extractionFields.Select(f =>
@@ -70,11 +78,15 @@ public class AiSummaryService
                         ? "- " + f.FieldName
                         : "- " + f.FieldName + ": " + f.FieldDescription);
 
+                extractionFieldLines = extractionFields
+                    .Select(f => $"FIELD_{SanitiseFieldKey(f.FieldName)}: [extracted value or UNKNOWN]")
+                    .ToList();
+
                 extractionFieldsBlock =
                     "\n\nSTEP 6 - Extract the following custom fields if present in the document. " +
-                    "For each field found, add it to the SUMMARY Key Details section in the format [FieldName]: [value]. " +
-                    "If a field is NOT found in the document, do NOT mention it at all — do not write UNKNOWN, do not write the field name. " +
-                    "Only include fields that have a real value.\n" +
+                    "For each field, return a line in the format shown below. " +
+                    "If a field is NOT found in the document, return UNKNOWN for its value. " +
+                    "Always return a line for every field listed.\n" +
                     string.Join("\n", fieldLines) +
                     "\n\nSTEP 7 - " + checkDetectionPrompt;
             }
@@ -163,7 +175,16 @@ public class AiSummaryService
                 notCheckBlock = "\n\nCHECK DETECTION LEARNING - these were NOT checks:\n" + string.Join("\n", ncLines);
             }
 
-            // -- Step 5: Call Azure OpenAI --
+            // -- Step 5: Build extraction field output lines for prompt --
+            var extractionFieldOutputBlock = string.Empty;
+            if (extractionFields.Any())
+            {
+                extractionFieldOutputBlock = "\n" + string.Join("\n", extractionFieldLines);
+            }
+
+            // -- Step 6: Call Azure OpenAI --
+            _logger.LogInformation("AiSummaryService: calling Azure OpenAI for Document {Id}.", documentId);
+
             var client = new AzureOpenAIClient(
                 new Uri(_config["AzureOpenAI:Endpoint"]),
                 new AzureKeyCredential(_config["AzureOpenAI:ApiKey"]));
@@ -214,7 +235,7 @@ public class AiSummaryService
                     CHECK_PAYER: [payer name, or UNKNOWN]
                     CHECK_NUMBER: [check number, or UNKNOWN]
                     SUGGESTED_STAFF: [staff email from the list, or UNKNOWN]
-                    ASSIGNMENT_CONFIDENCE: [1-10]
+                    ASSIGNMENT_CONFIDENCE: [1-10]{extractionFieldOutputBlock}
 
                     OCR TEXT:
                     {doc.OcrText}
@@ -223,7 +244,9 @@ public class AiSummaryService
             var response = await chatClient.CompleteChatAsync(new UserChatMessage(prompt));
             var raw = response.Value.Content[0].Text.Trim();
 
-            // -- Step 6: Parse response --
+            _logger.LogInformation("AiSummaryService: received response for Document {Id}.", documentId);
+
+            // -- Step 7: Parse response --
             var category = "mail";
             var confidence = 0;
             var summary = string.Empty;
@@ -236,6 +259,12 @@ public class AiSummaryService
             var checkNumber = string.Empty;
             var suggestedStaffEmail = string.Empty;
             var assignmentConfidence = 0;
+
+            var fieldKeyToName = extractionFields
+                .GroupBy(f => "FIELD_" + SanitiseFieldKey(f.FieldName), StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First().FieldName, StringComparer.OrdinalIgnoreCase);
+
+            var extractedFieldValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var line in raw.Split('\n'))
             {
@@ -285,39 +314,87 @@ public class AiSummaryService
                 }
                 else if (trimmed.StartsWith("ASSIGNMENT_CONFIDENCE:", StringComparison.OrdinalIgnoreCase))
                     int.TryParse(trimmed.Substring(22).Trim(), out assignmentConfidence);
+                else
+                {
+                    foreach (var kvp in fieldKeyToName)
+                    {
+                        if (trimmed.StartsWith(kvp.Key + ":", StringComparison.OrdinalIgnoreCase))
+                        {
+                            var val = trimmed.Substring(kvp.Key.Length + 1).Trim();
+                            if (!val.Equals("UNKNOWN", StringComparison.OrdinalIgnoreCase)
+                                && !string.IsNullOrWhiteSpace(val))
+                            {
+                                extractedFieldValues[kvp.Value] = val;
+                            }
+                            break;
+                        }
+                    }
+                }
             }
 
             if (string.IsNullOrWhiteSpace(summary)) summary = raw;
 
-            // -- Step 7: Validate extracted email --
-            // Reject payment portals, URLs, and anything that isn't a real email address
+            // -- Step 8: Validate extracted email --
             if (!string.IsNullOrWhiteSpace(fromEmail) && !ValidEmailRegex.IsMatch(fromEmail))
             {
                 _logger.LogDebug(
-                    "AiSummaryService: rejected invalid/non-contact email '{Email}' for document {Id}",
+                    "AiSummaryService: rejected invalid email '{Email}' for Document {Id}.",
                     fromEmail, documentId);
                 fromEmail = string.Empty;
             }
 
-            // -- Step 8: Strip UNKNOWN fields from summary --
+            // -- Step 9: Strip UNKNOWN fields from summary --
             summary = Regex.Replace(summary, @",?\s*[\w\s\-/]+:\s*UNKNOWN\b", "", RegexOptions.IgnoreCase).Trim();
             summary = Regex.Replace(summary, @",\s*$", "").Trim();
             summary = Regex.Replace(summary, @"\s{2,}", " ").Trim();
 
-            // -- Step 9: Format summary --
-            var html = summary
-                .Replace("<strong>Sender:", "<br><strong>Sender:")
-                .Replace("<strong>Purpose:", "<br><strong>Purpose:")
-                .Replace("<strong>Action Required:", "<br><strong>Action Required:")
-                .Replace("<strong>Key Details:", "<br><strong>Key Details:");
+            // -- Step 10: Build summary HTML from extraction fields + AI one-liner --
+            string html;
+            if (extractedFieldValues.Any())
+            {
+                var sb = new System.Text.StringBuilder();
+                sb.Append("<table style=\"border-collapse:collapse;width:100%;font-size:13px;\">");
+                foreach (var kvp in extractedFieldValues)
+                {
+                    sb.Append("<tr style=\"border-bottom:1px solid #e5e7eb;\">");
+                    sb.Append($"<td style=\"color:#6b7280;font-weight:600;padding:4px 12px 4px 0;white-space:nowrap;vertical-align:top;\">{System.Net.WebUtility.HtmlEncode(kvp.Key)}</td>");
+                    sb.Append($"<td style=\"color:#111827;padding:4px 0;\">{System.Net.WebUtility.HtmlEncode(kvp.Value)}</td>");
+                    sb.Append("</tr>");
+                }
+                sb.Append("</table>");
 
-            // Remove leading <br> if present
-            if (html.StartsWith("<br>", StringComparison.OrdinalIgnoreCase))
-                html = html.Substring(4).TrimStart();
+                // Append the AI one-liner below the fields
+                if (!string.IsNullOrWhiteSpace(summary))
+                {
+                    var aiLine = summary
+                        .Replace("<strong>Sender:", "<br><strong>Sender:")
+                        .Replace("<strong>Purpose:", "<br><strong>Purpose:")
+                        .Replace("<strong>Action Required:", "<br><strong>Action Required:")
+                        .Replace("<strong>Key Details:", "<br><strong>Key Details:");
+                    if (aiLine.StartsWith("<br>", StringComparison.OrdinalIgnoreCase))
+                        aiLine = aiLine.Substring(4).TrimStart();
+                    sb.Append($"<div style=\"margin-top:10px;padding-top:10px;border-top:1px solid #e5e7eb;font-size:13px;color:#374151;\">{aiLine}</div>");
+                }
+
+                html = sb.ToString();
+            }
+            else
+            {
+                // No extraction fields — fall back to AI summary one-liner
+                html = summary
+                    .Replace("<strong>Sender:", "<br><strong>Sender:")
+                    .Replace("<strong>Purpose:", "<br><strong>Purpose:")
+                    .Replace("<strong>Action Required:", "<br><strong>Action Required:")
+                    .Replace("<strong>Key Details:", "<br><strong>Key Details:");
+                if (html.StartsWith("<br>", StringComparison.OrdinalIgnoreCase))
+                    html = html.Substring(4).TrimStart();
+            }
 
             await documents.UpdateAiSummaryAsync(documentId, html);
 
-            // -- Step 10: Update filename with AI-generated meaningful name --
+            _logger.LogInformation("AiSummaryService: summary saved for Document {Id}.", documentId);
+
+            // -- Step 11: Update filename --
             if (!string.IsNullOrWhiteSpace(documentName))
             {
                 var cleanName = Regex.Replace(documentName, @"[^a-zA-Z0-9_]", "_");
@@ -328,10 +405,10 @@ public class AiSummaryService
                 await documents.UpdateFileNameAsync(documentId, newFileName);
             }
 
-            // -- Step 11: Resolve sender --
+            // -- Step 12: Resolve sender --
             await senderResolution.ResolveAsync(documentId, doc.TenantId, fromName, fromEmail);
 
-            // -- Step 12: Save check if detected --
+            // -- Step 13: Save check if detected --
             if (isCheck && !string.IsNullOrWhiteSpace(checkPayer))
             {
                 decimal.TryParse(checkAmount, out var parsedAmount);
@@ -345,7 +422,27 @@ public class AiSummaryService
                 });
             }
 
-            // -- Step 13: AI Assignment --
+            // -- Step 14: Save extraction field results --
+            if (extractedFieldValues.Any())
+            {
+                var results = extractedFieldValues.Select(kvp => new DocumentExtractionResult
+                {
+                    DocumentExtractionResultId = Guid.NewGuid(),
+                    DocumentId = documentId,
+                    TenantId = doc.TenantId,
+                    FieldName = kvp.Key,
+                    FieldValue = kvp.Value,
+                    ExtractedAt = DateTime.UtcNow
+                }).ToList();
+
+                await extractionResultRepo.SaveResultsAsync(documentId, doc.TenantId, results);
+
+                _logger.LogInformation(
+                    "AiSummaryService: saved {Count} extraction fields for Document {Id}.",
+                    results.Count, documentId);
+            }
+
+            // -- Step 15: AI Assignment --
             if (!string.IsNullOrWhiteSpace(suggestedStaffEmail) && assignmentMode != "Off")
             {
                 await aiAssignmentService.ProcessAsync(
@@ -353,7 +450,7 @@ public class AiSummaryService
                     assignmentConfidence, assignmentMode, confidenceThreshold);
             }
 
-            // -- Step 14: Decide folder --
+            // -- Step 16: Decide folder --
             int statusId;
             if (isWhitelisted || category == "mail")
                 statusId = 1;
@@ -367,11 +464,10 @@ public class AiSummaryService
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"AiSummaryService error: {ex.Message}");
+            _logger.LogError(ex, "AiSummaryService: failed for Document {Id}.", documentId);
         }
     }
 
-    private ILogger<AiSummaryService> _logger =>
-        _scopeFactory.CreateScope().ServiceProvider
-            .GetRequiredService<ILogger<AiSummaryService>>();
+    private static string SanitiseFieldKey(string fieldName)
+        => Regex.Replace(fieldName.ToUpperInvariant().Trim(), @"[^A-Z0-9]+", "_").Trim('_');
 }

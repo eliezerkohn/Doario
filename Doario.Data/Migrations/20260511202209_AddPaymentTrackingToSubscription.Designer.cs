@@ -4,6 +4,7 @@ using Doario.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Doario.Data.Migrations
 {
     [DbContext(typeof(DoarioDataContext))]
-    partial class DoarioDataContextModelSnapshot : ModelSnapshot
+    [Migration("20260511202209_AddPaymentTrackingToSubscription")]
+    partial class AddPaymentTrackingToSubscription
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -946,53 +949,6 @@ namespace Doario.Data.Migrations
                     b.ToTable("DocumentDeliveries");
                 });
 
-            modelBuilder.Entity("Doario.Data.Models.Mail.DocumentExtractionResult", b =>
-                {
-                    b.Property<Guid>("DocumentExtractionResultId")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<string>("BoundingBox")
-                        .HasMaxLength(100)
-                        .HasColumnType("nvarchar(100)");
-
-                    b.Property<string>("CorrectedValue")
-                        .HasMaxLength(2000)
-                        .HasColumnType("nvarchar(2000)");
-
-                    b.Property<Guid>("DocumentId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<DateTime>("ExtractedAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<string>("FieldName")
-                        .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("nvarchar(200)");
-
-                    b.Property<string>("FieldValue")
-                        .HasMaxLength(2000)
-                        .HasColumnType("nvarchar(2000)");
-
-                    b.Property<bool?>("IsConfirmed")
-                        .HasColumnType("bit");
-
-                    b.Property<int?>("PageNumber")
-                        .HasColumnType("int");
-
-                    b.Property<Guid>("TenantId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.HasKey("DocumentExtractionResultId");
-
-                    b.HasIndex("DocumentId");
-
-                    b.HasIndex("TenantId");
-
-                    b.ToTable("DocumentExtractionResults");
-                });
-
             modelBuilder.Entity("Doario.Data.Models.Mail.DocumentFeedback", b =>
                 {
                     b.Property<Guid>("DocumentFeedbackId")
@@ -1378,9 +1334,6 @@ namespace Doario.Data.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
 
-                    b.Property<decimal>("BaseDiscountPercent")
-                        .HasColumnType("decimal(18,2)");
-
                     b.Property<string>("Code")
                         .IsRequired()
                         .HasMaxLength(50)
@@ -1522,7 +1475,7 @@ namespace Doario.Data.Migrations
                         new
                         {
                             SubscriptionPlanId = new Guid("b1000000-0001-0001-0001-000000000001"),
-                            CreatedAt = new DateTime(2026, 5, 14, 19, 51, 16, 955, DateTimeKind.Utc).AddTicks(8400),
+                            CreatedAt = new DateTime(2026, 5, 11, 20, 22, 8, 385, DateTimeKind.Utc).AddTicks(8076),
                             Description = "Perfect for small offices with low mail volume.",
                             EndDate = new DateTime(9999, 12, 31, 0, 0, 0, 0, DateTimeKind.Utc),
                             ExtraDocumentPrice = 1.00m,
@@ -1538,7 +1491,7 @@ namespace Doario.Data.Migrations
                         new
                         {
                             SubscriptionPlanId = new Guid("b1000000-0002-0002-0002-000000000002"),
-                            CreatedAt = new DateTime(2026, 5, 14, 19, 51, 16, 956, DateTimeKind.Utc).AddTicks(922),
+                            CreatedAt = new DateTime(2026, 5, 11, 20, 22, 8, 386, DateTimeKind.Utc).AddTicks(274),
                             Description = "For growing teams handling moderate mail volume.",
                             EndDate = new DateTime(9999, 12, 31, 0, 0, 0, 0, DateTimeKind.Utc),
                             ExtraDocumentPrice = 0.70m,
@@ -1554,7 +1507,7 @@ namespace Doario.Data.Migrations
                         new
                         {
                             SubscriptionPlanId = new Guid("b1000000-0003-0003-0003-000000000003"),
-                            CreatedAt = new DateTime(2026, 5, 14, 19, 51, 16, 956, DateTimeKind.Utc).AddTicks(941),
+                            CreatedAt = new DateTime(2026, 5, 11, 20, 22, 8, 386, DateTimeKind.Utc).AddTicks(289),
                             Description = "For high-volume mail rooms processing hundreds of documents.",
                             EndDate = new DateTime(9999, 12, 31, 0, 0, 0, 0, DateTimeKind.Utc),
                             ExtraDocumentPrice = 0.50m,
@@ -2225,25 +2178,6 @@ namespace Doario.Data.Migrations
                     b.Navigation("DocumentAssignment");
 
                     b.Navigation("SystemStatus");
-
-                    b.Navigation("Tenant");
-                });
-
-            modelBuilder.Entity("Doario.Data.Models.Mail.DocumentExtractionResult", b =>
-                {
-                    b.HasOne("Doario.Data.Models.Mail.Document", "Document")
-                        .WithMany()
-                        .HasForeignKey("DocumentId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("Doario.Data.Models.SaaS.Tenant", "Tenant")
-                        .WithMany()
-                        .HasForeignKey("TenantId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.Navigation("Document");
 
                     b.Navigation("Tenant");
                 });

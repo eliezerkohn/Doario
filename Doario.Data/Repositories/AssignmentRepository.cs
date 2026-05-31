@@ -50,4 +50,15 @@ public class AssignmentRepository : IAssignmentRepository
                      && a.AssignedToEmail.ToLower() == email.ToLower())
             .OrderByDescending(a => a.AssignedAt)
             .ToListAsync();
+
+    public async Task<DocumentAssignment?> GetByDocumentAndTokenAsync(Guid documentId, string token)
+        => await _db.DocumentAssignments
+            .Include(a => a.AssignedToStaff)
+            .FirstOrDefaultAsync(a => a.DocumentId == documentId
+                                   && a.StaffAccessToken == token);
+
+    public async Task UpdateNoteAsync(Guid assignmentId, string note)
+        => await _db.DocumentAssignments
+            .Where(a => a.DocumentAssignmentId == assignmentId)
+            .ExecuteUpdateAsync(s => s.SetProperty(a => a.Note, note));
 }

@@ -14,13 +14,22 @@ namespace Doario.Web;
 
 public class Program
 {
-    public static void Main(string[] args)
+    public static async Task Main(string[] args)
     {
         var builder = WebApplication.CreateBuilder(args);
 
         // ── Database ──────────────────────────────────────────────────────────
         builder.Services.AddDbContext<DoarioDataContext>(options =>
-            options.UseSqlServer(builder.Configuration.GetConnectionString("ConStr")));
+            options.UseSqlServer(
+                builder.Configuration.GetConnectionString("ConStr"),
+                sqlOptions =>
+                {
+                    sqlOptions.EnableRetryOnFailure(
+                        maxRetryCount: 5,
+                        maxRetryDelay: TimeSpan.FromSeconds(10),
+                        errorNumbersToAdd: null);
+                    sqlOptions.CommandTimeout(60);
+                }));
 
         // ── Microsoft Identity / Azure AD ─────────────────────────────────────
         builder.Services.AddAuthentication(OpenIdConnectDefaults.AuthenticationScheme)
@@ -133,10 +142,19 @@ public class Program
 
         builder.Services.AddSingleton<ScanConfirmQueue>();
 
+        builder.Services.AddScoped<IDocumentExtractionResultRepository, DocumentExtractionResultRepository>();
+
         // ── Background Services ───────────────────────────────────────────────
         builder.Services.AddHostedService<DoarioBackgroundService>();
 
         var app = builder.Build();
+
+        // ── Warm up DB connection pool on startup ─────────────────────────────
+        using (var scope = app.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<DoarioDataContext>();
+            await db.Database.ExecuteSqlRawAsync("SELECT 1");
+        }
 
         // ── Pipeline ──────────────────────────────────────────────────────────
         if (!app.Environment.IsDevelopment())
