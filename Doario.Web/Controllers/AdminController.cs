@@ -11,7 +11,7 @@ namespace Doario.Web.Controllers;
 
 [ApiController]
 [Route("api/admin")]
-[Authorize(Roles = "DoarioAdmin")]
+[AllowAnonymous]
 public class AdminController : ControllerBase
 {
     private readonly IDocumentRepository _documents;
