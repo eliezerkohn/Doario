@@ -1,12 +1,14 @@
 ﻿using Doario.Data.Models.Mail;
 using Doario.Data.Repositories;
 using Doario.Web.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Doario.Web.Controllers;
 
 [Route("api/upload")]
 [ApiController]
+[AllowAnonymous]
 public class UploadController : ControllerBase
 {
     private readonly SharePointService _sharePoint;

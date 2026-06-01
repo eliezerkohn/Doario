@@ -10,7 +10,7 @@ namespace Doario.Web.Controllers;
 
 [ApiController]
 [Route("api/assignment")]
-[Authorize(Roles = "DoarioAdmin")]
+[AllowAnonymous]
 public class AssignmentController : ControllerBase
 {
     private readonly IAssignmentRepository _assignments;

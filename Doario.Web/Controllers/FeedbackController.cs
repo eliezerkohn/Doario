@@ -8,7 +8,7 @@ namespace Doario.Web.Controllers;
 
 [ApiController]
 [Route("api/feedback")]
-[Authorize(Roles = "DoarioAdmin")]
+[AllowAnonymous]
 public class FeedbackController : ControllerBase
 {
     private readonly IDocumentFeedbackRepository _feedback;

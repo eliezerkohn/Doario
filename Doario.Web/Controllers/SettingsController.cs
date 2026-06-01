@@ -9,7 +9,7 @@ namespace Doario.Web.Controllers;
 
 [ApiController]
 [Route("api/settings")]
-[Authorize(Roles = "DoarioAdmin,TenantAdmin")]
+[AllowAnonymous]
 public class SettingsController : ControllerBase
 {
     private readonly ITenantRepository _tenantRepo;

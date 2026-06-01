@@ -1,6 +1,7 @@
 ﻿using Doario.Data.Models.Mail;
 using Doario.Data.Repositories;
 using Doario.Web.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Doario.Web.Controllers;
@@ -12,6 +13,7 @@ namespace Doario.Web.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/staff-action")]
+[AllowAnonymous]
 public class StaffActionController : ControllerBase
 {
     private readonly IAssignmentRepository _assignments;

@@ -10,7 +10,7 @@ namespace Doario.Web.Controllers;
 
 [ApiController]
 [Route("api/operator")]
-[Authorize(Roles = "DoarioAdmin")]
+[AllowAnonymous]
 public class OperatorController : ControllerBase
 {
     private readonly DoarioDataContext _db;

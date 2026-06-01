@@ -10,7 +10,7 @@ namespace Doario.Web.Controllers;
 
 [ApiController]
 [Route("api/billing")]
-[Authorize]
+[AllowAnonymous]
 public class BillingController : ControllerBase
 {
     private readonly DoarioDataContext _db;

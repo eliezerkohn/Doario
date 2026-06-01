@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 
 namespace Doario.Web.Controllers;
 
@@ -8,6 +9,7 @@ namespace Doario.Web.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/demo-auth")]
+[AllowAnonymous]
 public class DemoAuthController : ControllerBase
 {
     private readonly IConfiguration _config;
