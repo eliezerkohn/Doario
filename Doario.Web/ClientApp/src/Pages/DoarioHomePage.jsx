@@ -6,6 +6,48 @@ export default function DoarioHomePage() {
     const [menuOpen, setMenuOpen] = useState(false);
 
     useEffect(() => {
+        // SEO meta tags
+        document.title = "Doario — AI Mail Digitisation Software";
+        const setMeta = (name, content, prop = false) => {
+            const attr = prop ? "property" : "name";
+            let el = document.querySelector(`meta[${attr}="${name}"]`);
+            if (!el) { el = document.createElement("meta"); el.setAttribute(attr, name); document.head.appendChild(el); }
+            el.setAttribute("content", content);
+        };
+        setMeta("description", "Doario scans incoming physical mail, reads it with AI, extracts key data and delivers it to your team's Outlook inbox in under 60 seconds. Paperless mailroom software for modern offices.");
+        setMeta("keywords", "mail digitisation software, incoming mail processing, AI mail scanning, physical mail management, mailroom software, mail digitization, paper mail to digital, office mail management");
+        setMeta("robots", "index, follow");
+        setMeta("og:title", "Doario — AI Mail Digitisation Software", true);
+        setMeta("og:description", "Turn physical mail into digital action items in under 60 seconds. AI-powered mailroom software.", true);
+        setMeta("og:url", "https://doario.com", true);
+        setMeta("og:type", "website", true);
+        setMeta("twitter:card", "summary_large_image");
+        setMeta("twitter:title", "Doario — AI Mail Digitisation Software");
+        setMeta("twitter:description", "Turn physical mail into digital action items in under 60 seconds.");
+
+        // Schema.org structured data
+        const schema = {
+            "@context": "https://schema.org",
+            "@type": "SoftwareApplication",
+            "name": "Doario",
+            "description": "AI-powered mail digitisation software that scans incoming physical mail, extracts key data with AI, and delivers it to your team's Outlook inbox.",
+            "applicationCategory": "BusinessApplication",
+            "operatingSystem": "Web",
+            "url": "https://doario.com",
+            "offers": { "@type": "Offer", "category": "SaaS" },
+            "contactPoint": {
+                "@type": "ContactPoint",
+                "telephone": "+1-917-474-4298",
+                "email": "eliezer@eliprosoftwaresolutions.com",
+                "contactType": "sales"
+            }
+        };
+        let schemaEl = document.getElementById("schema-org");
+        if (!schemaEl) { schemaEl = document.createElement("script"); schemaEl.id = "schema-org"; schemaEl.type = "application/ld+json"; document.head.appendChild(schemaEl); }
+        schemaEl.textContent = JSON.stringify(schema);
+    }, []);
+
+    useEffect(() => {
         const onScroll = () => setScrolled(window.scrollY > 40);
         window.addEventListener("scroll", onScroll);
         return () => window.removeEventListener("scroll", onScroll);
@@ -58,6 +100,7 @@ export default function DoarioHomePage() {
                 .feature-card:hover { border-color: rgba(52,211,153,0.4) !important; transform: translateY(-4px); background: rgba(255,255,255,0.04) !important; }
                 .feature-card { transition: all 0.25s ease !important; }
                 .nav-link:hover { color: #34d399 !important; }
+                .contact-link:hover { color: #34d399 !important; }
                 .hamburger { display: none !important; }
                 @media (max-width: 900px) {
                     .hero-section-inner { flex-direction: column !important; padding: 100px 32px 60px !important; min-height: auto !important; }
@@ -69,6 +112,7 @@ export default function DoarioHomePage() {
                     .section-pad { padding: 80px 32px !important; }
                     .nav-links { display: none !important; }
                     .hamburger { display: flex !important; }
+                    .contact-grid { grid-template-columns: 1fr !important; }
                 }
                 @media (max-width: 540px) {
                     .hero-title { font-size: 38px !important; }
@@ -89,6 +133,7 @@ export default function DoarioHomePage() {
                     <div className="nav-links" style={S.navLinks}>
                         <a href="#features" style={S.navLink} className="nav-link">Features</a>
                         <a href="#how" style={S.navLink} className="nav-link">How it works</a>
+                        <a href="#contact" style={S.navLink} className="nav-link">Contact</a>
                         <a href="/login" style={S.navCta} className="btn-demo">See it in action →</a>
                     </div>
                     <button
@@ -105,6 +150,7 @@ export default function DoarioHomePage() {
                     <div style={{ background: "rgba(10,22,40,0.98)", padding: "16px 24px 28px", borderTop: "1px solid rgba(255,255,255,0.06)", display: "flex", flexDirection: "column", gap: 18 }}>
                         <a href="#features" style={{ color: "rgba(255,255,255,0.7)", textDecoration: "none", fontSize: 15, fontWeight: 500 }} onClick={() => setMenuOpen(false)}>Features</a>
                         <a href="#how" style={{ color: "rgba(255,255,255,0.7)", textDecoration: "none", fontSize: 15, fontWeight: 500 }} onClick={() => setMenuOpen(false)}>How it works</a>
+                        <a href="#contact" style={{ color: "rgba(255,255,255,0.7)", textDecoration: "none", fontSize: 15, fontWeight: 500 }} onClick={() => setMenuOpen(false)}>Contact</a>
                         <a href="/login" style={{ ...S.navCta, textAlign: "center" }} className="btn-demo">See it in action →</a>
                     </div>
                 )}
@@ -116,18 +162,18 @@ export default function DoarioHomePage() {
                 <div style={S.heroGlow2} />
                 <div className="hero-section-inner" style={S.heroSectionInner}>
                     <div className="hero-text" style={S.heroText}>
-                        <div style={S.heroEyebrow}>AI Mail Digitisation</div>
+                        <div style={S.heroEyebrow}>AI Mail Digitisation Software</div>
                         <h1 className="hero-title" style={S.heroTitle}>
                             Your mailroom,<br />
                             <span style={{ color: "#34d399" }}>digitised.</span>
                         </h1>
                         <p style={S.heroSub}>
-                            Doario scans physical mail, reads it with AI, extracts key data,
+                            Doario scans incoming physical mail, reads it with AI, extracts key data,
                             and delivers it straight to your team's Outlook inbox — in under 60 seconds.
                         </p>
                         <div className="hero-ctas" style={S.heroCtas}>
                             <a href="/login" style={S.heroBtnPrimary} className="btn-demo">See it in action →</a>
-                            <a href="#how" style={S.heroBtnSecondary}>How it works</a>
+                            <a href="#contact" style={S.heroBtnSecondary}>Get in touch</a>
                         </div>
                         <div style={S.heroStats}>
                             {[["< 60s", "Scan to inbox"], ["100%", "Paperless"], ["AI", "Data extraction"]].map(([val, label]) => (
@@ -219,11 +265,47 @@ export default function DoarioHomePage() {
                 </div>
             </section>
 
+            {/* ── Contact ── */}
+            <section id="contact" className="section-pad" style={{ ...S.section, background: "rgba(255,255,255,0.015)" }}>
+                <div style={S.sectionInner}>
+                    <div data-id="contact-head" className={visible["contact-head"] ? "visible" : ""} style={S.sectionHead}>
+                        <div style={S.eyebrow}>Get in touch</div>
+                        <h2 className="section-title" style={S.sectionTitle}>Let's talk about your mailroom</h2>
+                        <p style={{ fontSize: 16, color: "rgba(255,255,255,0.4)", marginTop: 16, fontWeight: 300 }}>
+                            Interested in Doario for your organisation? We'd love to hear from you.
+                        </p>
+                    </div>
+                    <div className="contact-grid" data-id="contact-cards" className={`contact-grid ${visible["contact-cards"] ? "visible" : ""}`} style={S.contactGrid}>
+                        <a href="tel:+19174744298" style={S.contactCard} className="contact-link">
+                            <div style={S.contactIcon}>📞</div>
+                            <div style={S.contactLabel}>Phone</div>
+                            <div style={S.contactValue}>(917) 474-4298</div>
+                        </a>
+                        <a href="mailto:eliezer@eliprosoftwaresolutions.com" style={S.contactCard} className="contact-link">
+                            <div style={S.contactIcon}>✉️</div>
+                            <div style={S.contactLabel}>Email</div>
+                            <div style={S.contactValue}>eliezer@eliprosoftwaresolutions.com</div>
+                        </a>
+                        <a href="/login" style={{ ...S.contactCard, borderColor: "rgba(52,211,153,0.3)", background: "rgba(52,211,153,0.04)" }} className="contact-link">
+                            <div style={S.contactIcon}>🎯</div>
+                            <div style={S.contactLabel}>Live Demo</div>
+                            <div style={{ ...S.contactValue, color: "#34d399" }}>See it in action →</div>
+                        </a>
+                    </div>
+                </div>
+            </section>
+
             {/* ── Footer ── */}
             <footer style={S.footer}>
                 <div style={S.footerInner}>
-                    <div style={S.logo}>Do<span style={{ color: "#34d399" }}>a</span>rio</div>
-                    <div style={S.footerSub}>AI-powered mail digitisation for modern offices.</div>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 16 }}>
+                        <div style={S.logo}>Do<span style={{ color: "#34d399" }}>a</span>rio</div>
+                        <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
+                            <a href="tel:+19174744298" style={{ color: "rgba(255,255,255,0.3)", textDecoration: "none", fontSize: 13 }}>(917) 474-4298</a>
+                            <a href="mailto:eliezer@eliprosoftwaresolutions.com" style={{ color: "rgba(255,255,255,0.3)", textDecoration: "none", fontSize: 13 }}>eliezer@eliprosoftwaresolutions.com</a>
+                        </div>
+                    </div>
+                    <div style={S.footerSub}>AI-powered mail digitisation software for modern offices. © {new Date().getFullYear()} Doario.</div>
                 </div>
             </footer>
         </div>
@@ -236,7 +318,7 @@ const S = {
     navInner: { maxWidth: 1500, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", height: 68, padding: "0 48px" },
     logo: { fontFamily: "'Playfair Display', serif", fontSize: 24, fontWeight: 800, color: "#fff", letterSpacing: "-0.5px" },
     navLinks: { display: "flex", alignItems: "center", gap: 36 },
-    navLink: { fontSize: 15, color: "rgba(255,255,255,0.6)", textDecoration: "none", fontWeight: 500 },
+    navLink: { fontSize: 15, color: "rgba(255,255,255,0.6)", textDecoration: "none", fontWeight: 500, transition: "color 0.15s" },
     navCta: { padding: "10px 24px", background: "#34d399", color: "#0a1628", borderRadius: 8, fontSize: 14, fontWeight: 700, textDecoration: "none", display: "inline-block" },
     heroSection: { position: "relative", overflow: "hidden", background: "#0a1628" },
     heroGlow: { position: "absolute", top: "15%", left: "0%", width: 700, height: 700, background: "radial-gradient(circle, rgba(52,211,153,0.1) 0%, transparent 65%)", pointerEvents: "none" },
@@ -253,7 +335,7 @@ const S = {
     heroStat: { display: "flex", flexDirection: "column", gap: 5 },
     heroStatVal: { fontFamily: "'Playfair Display', serif", fontSize: 32, fontWeight: 800, color: "#fff" },
     heroStatLabel: { fontSize: 11, color: "rgba(255,255,255,0.35)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "1.5px" },
-    floatingCard: { width: 360, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 18, overflow: "hidden", backdropFilter: "blur(24px)", boxShadow: "0 40px 100px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.05)", flexShrink: 0 },
+    floatingCard: { width: 360, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 18, overflow: "hidden", backdropFilter: "blur(24px)", boxShadow: "0 40px 100px rgba(0,0,0,0.5)", flexShrink: 0 },
     cardHeader: { display: "flex", alignItems: "center", gap: 7, padding: "14px 18px", borderBottom: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.03)" },
     cardDot: { width: 11, height: 11, borderRadius: "50%", background: "#ef4444" },
     cardTitle: { fontSize: 11, color: "rgba(255,255,255,0.35)", marginLeft: 6, fontWeight: 600, textTransform: "uppercase", letterSpacing: "1px" },
@@ -283,7 +365,12 @@ const S = {
     ctaInner: { position: "relative", maxWidth: 680, margin: "0 auto" },
     ctaTitle: { fontFamily: "'Playfair Display', serif", fontSize: 52, fontWeight: 900, color: "#fff", marginBottom: 20, letterSpacing: "-0.5px" },
     ctaSub: { fontSize: 18, color: "rgba(255,255,255,0.4)", marginBottom: 40, lineHeight: 1.65, fontWeight: 300 },
+    contactGrid: { display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 24, maxWidth: 900, margin: "0 auto" },
+    contactCard: { display: "flex", flexDirection: "column", alignItems: "center", padding: "36px 28px", background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 16, textDecoration: "none", textAlign: "center", transition: "all 0.2s ease", cursor: "pointer" },
+    contactIcon: { fontSize: 32, marginBottom: 14 },
+    contactLabel: { fontSize: 11, fontWeight: 600, color: "rgba(255,255,255,0.35)", textTransform: "uppercase", letterSpacing: "1.5px", marginBottom: 8 },
+    contactValue: { fontSize: 15, color: "rgba(255,255,255,0.75)", fontWeight: 500, wordBreak: "break-all" },
     footer: { borderTop: "1px solid rgba(255,255,255,0.06)", padding: "40px 120px" },
-    footerInner: { maxWidth: 1500, margin: "0 auto", display: "flex", flexDirection: "column", gap: 8 },
-    footerSub: { fontSize: 13, color: "rgba(255,255,255,0.22)" },
+    footerInner: { maxWidth: 1500, margin: "0 auto", display: "flex", flexDirection: "column", gap: 12 },
+    footerSub: { fontSize: 13, color: "rgba(255,255,255,0.2)" },
 };
