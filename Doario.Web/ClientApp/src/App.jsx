@@ -13,7 +13,7 @@ import ExtractionFieldsSettings from './Pages/Settings/ExtractionFieldsSettings'
 import AiAssignmentSettings from './Pages/Settings/AiAssignmentSettings';
 import InboxSettings from './Pages/Settings/InboxSettings';
 import BillingDashboard from './Pages/Settings/Billingdashboard';
-import OperatorPortal from './Pages/OperatorPortal';
+import OperatorPortal from './Pages/Operatorportal';
 import VerifyExtractionPage from './Pages/VerifyExtractionPage';
 import DoarioHomePage from './Pages/DoarioHomePage';
 import LoginPage from './Pages/LoginPage';
