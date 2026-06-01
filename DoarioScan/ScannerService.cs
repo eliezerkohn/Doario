@@ -13,17 +13,17 @@ public class ScannerService
     private readonly SettingsService _settingsService;
 
     // A page is blank if this fraction of sampled pixels are "light"
-    // 0.995 = 99.5% of sampled pixels must be near-white
-    // Raised from 0.98 — pages with faint content were being incorrectly skipped
     private const double BlankThreshold = 0.995;
 
-    // Pixel brightness threshold — 0-255, anything above this is "white"
-    // Lowered from 240 to 200 — faint text/content at 210-235 brightness
-    // was being counted as white, causing near-blank pages to be skipped
+    // Pixel brightness threshold — anything above this is "white"
     private const int WhiteLevel = 200;
 
-    // Sample every Nth pixel for performance — no need to check every pixel
+    // Sample every Nth pixel for performance
     private const int SampleStep = 10;
+
+    // JPEG quality for scanned pages — 70 is a good balance of size vs quality
+    // Reduces page size from ~2MB (PNG) to ~200KB (JPEG) — 10x smaller
+    private const long JpegQuality = 70L;
 
     public ScannerService(SettingsService settingsService)
     {
@@ -46,6 +46,7 @@ public class ScannerService
         catch { }
         return scanners;
     }
+
     public async Task<ScanResponse> ScanAsync(ScanRequest request)
     {
         var response = new ScanResponse();
@@ -131,17 +132,51 @@ public class ScannerService
                             }
 
                             // ── Blank page detection ──────────────────────────
-                            // Sample pixels — if nearly all are near-white, treat
-                            // this page as a blank separator and add empty string.
-                            // Empty string = blank page signal to the backend splitter.
                             if (IsBlankPage(bmp))
                             {
                                 lock (pages) { pages.Add(string.Empty); }
                                 return;
                             }
 
+                            // ── Save as JPEG ─────────────────────────────────
+                            // JPEG doesn't support indexed color (8bpp grayscale).
+                            // Convert to 24bpp RGB first so JPEG encoder works correctly.
                             using var ms = new MemoryStream();
-                            bmp.Save(ms, ImageFormat.Png);
+                            var jpegEncoder = ImageCodecInfo.GetImageEncoders()
+                                .FirstOrDefault(enc => enc.FormatID == ImageFormat.Jpeg.Guid);
+
+                            if (jpegEncoder != null)
+                            {
+                                // Convert indexed/grayscale to 24bpp RGB for JPEG compatibility
+                                Bitmap bmpToSave = bmp;
+                                Bitmap converted = null;
+                                if (bmp.PixelFormat != PixelFormat.Format24bppRgb &&
+                                    bmp.PixelFormat != PixelFormat.Format32bppArgb)
+                                {
+                                    converted = new Bitmap(bmp.Width, bmp.Height, PixelFormat.Format24bppRgb);
+                                    using var g = Graphics.FromImage(converted);
+                                    g.DrawImage(bmp, 0, 0, bmp.Width, bmp.Height);
+                                    bmpToSave = converted;
+                                }
+
+                                try
+                                {
+                                    var encoderParams = new EncoderParameters(1);
+                                    encoderParams.Param[0] = new EncoderParameter(
+                                        Encoder.Quality, JpegQuality);
+                                    bmpToSave.Save(ms, jpegEncoder, encoderParams);
+                                }
+                                finally
+                                {
+                                    converted?.Dispose();
+                                }
+                            }
+                            else
+                            {
+                                // Fallback to PNG if JPEG encoder not found
+                                bmp.Save(ms, ImageFormat.Png);
+                            }
+
                             var base64 = Convert.ToBase64String(ms.ToArray());
                             lock (pages) { pages.Add(base64); }
                         }
@@ -232,8 +267,6 @@ public class ScannerService
     }
 
     // ── Blank page detection ──────────────────────────────────────────────────
-    // Samples every SampleStep-th pixel. Converts to grayscale brightness.
-    // If >= BlankThreshold of sampled pixels are above WhiteLevel, it's blank.
 
     private static bool IsBlankPage(Bitmap bmp)
     {
@@ -247,7 +280,6 @@ public class ScannerService
                 for (int x = 0; x < bmp.Width; x += SampleStep)
                 {
                     var pixel = bmp.GetPixel(x, y);
-                    // Perceived brightness (standard luminance weights)
                     var brightness = (int)(pixel.R * 0.299 + pixel.G * 0.587 + pixel.B * 0.114);
                     total++;
                     if (brightness >= WhiteLevel)
@@ -256,12 +288,10 @@ public class ScannerService
             }
 
             if (total == 0) return true;
-
             return (double)light / total >= BlankThreshold;
         }
         catch
         {
-            // If pixel analysis fails for any reason, don't treat it as blank
             return false;
         }
     }

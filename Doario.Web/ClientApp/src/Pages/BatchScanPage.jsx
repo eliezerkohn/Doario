@@ -343,40 +343,41 @@ export default function BatchScanPage() {
         if (unconfirmed.length === 0) return;
         setError(null);
 
-        setDocuments(prev => prev.map(d =>
-            !d.confirmed ? { ...d, confirming: true } : d
-        ));
-
-        try {
-            await axios.post(`${BRIDGE_URL}/scan-confirm-batch`, {
-                documents: unconfirmed.map(d => ({
-                    tempId: d.tempId,
-                    pages: d.pages,
-                    batchScanId: batchScanId,
-                    documentIndex: d.index,
-                    pageStart: d.pageStart,
-                    pageEnd: d.pageEnd,
-                }))
-            });
-
-            // Strip pages immediately after sending
+        // Send one document at a time to avoid OutOfMemoryException
+        for (const doc of unconfirmed) {
             setDocuments(prev => prev.map(d =>
-                !d.confirmed ? stripPages({ ...d, confirming: true }) : d
+                d.tempId === doc.tempId ? { ...d, confirming: true } : d
             ));
-            setSelected(prev =>
-                prev && !prev.confirmed
-                    ? { ...stripPages(prev), confirming: true }
-                    : prev
-            );
-
-            jobRunningRef.current = true;
-            setJobRunning(true);
-            setJobFinished(false);
-            startPolling(); // start polling once
-        } catch (err) {
-            setDocuments(prev => prev.map(d => ({ ...d, confirming: false })));
-            setError(err.response?.data?.error || 'Save All failed.');
+            try {
+                await axios.post(`${BRIDGE_URL}/scan-confirm-batch`, {
+                    documents: [{
+                        tempId: doc.tempId,
+                        pages: doc.pages,
+                        batchScanId: batchScanId,
+                        documentIndex: doc.index,
+                        pageStart: doc.pageStart,
+                        pageEnd: doc.pageEnd,
+                    }]
+                });
+                // Strip pages immediately after sending to free memory
+                setDocuments(prev => prev.map(d =>
+                    d.tempId === doc.tempId ? stripPages({ ...d, confirming: true }) : d
+                ));
+                setSelected(prev =>
+                    prev?.tempId === doc.tempId ? { ...stripPages(prev), confirming: true } : prev
+                );
+            } catch (err) {
+                setDocuments(prev => prev.map(d =>
+                    d.tempId === doc.tempId ? { ...d, confirming: false } : d
+                ));
+                setError(err.response?.data?.error || 'Save All failed.');
+            }
         }
+
+        jobRunningRef.current = true;
+        setJobRunning(true);
+        setJobFinished(false);
+        startPolling();
     };
 
     // ── Delete ────────────────────────────────────────────────────────────────
@@ -605,24 +606,26 @@ export default function BatchScanPage() {
                             </div>
 
                             <div ref={previewRef} style={S.previewImageWrap}>
-                                {selected.previewBase64 ? (
+                                {selected.pages?.length > 0 ? (
+                                    selected.pages.map((p, i) => p ? (
+                                        <div key={i} style={S.previewPageWrap}>
+                                            <div style={S.previewPageLabel}>Page {i + 1}</div>
+                                            <img src={`data:image/jpeg;base64,${p}`} alt={`Page ${i + 1}`} style={S.previewImage} />
+                                            {i === 0 && selected.confirming && <div style={S.savingOverlay}>⏳ Saving to server…</div>}
+                                            {i === 0 && selected.confirmed && <div style={S.savedOverlay}>✓ Saved</div>}
+                                        </div>
+                                    ) : null)
+                                ) : selected.previewBase64 ? (
                                     <div style={S.previewPageWrap}>
                                         <div style={S.previewPageLabel}>Preview</div>
                                         <img
-                                            src={`data:image/png;base64,${selected.previewBase64}`}
+                                            src={`data:image/jpeg;base64,${selected.previewBase64}`}
                                             alt="Preview"
                                             style={S.previewImage}
                                         />
                                         {selected.confirming && <div style={S.savingOverlay}>⏳ Saving to server…</div>}
                                         {selected.confirmed && <div style={S.savedOverlay}>✓ Saved</div>}
                                     </div>
-                                ) : selected.pages?.length > 0 ? (
-                                    selected.pages.map((p, i) => p ? (
-                                        <div key={i} style={S.previewPageWrap}>
-                                            <div style={S.previewPageLabel}>Page {i + 1}</div>
-                                            <img src={`data:image/png;base64,${p}`} alt={`Page ${i + 1}`} style={S.previewImage} />
-                                        </div>
-                                    ) : null)
                                 ) : (
                                     <div style={{ color: '#9ca3af', fontSize: 13 }}>No preview available.</div>
                                 )}

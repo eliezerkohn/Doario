@@ -127,8 +127,16 @@ public class IngestController : ControllerBase
 
         try
         {
-            var ocrTasks = request.Pages.Select(p => _ocrService.OcrPageAsync(p));
-            var pageTexts = (await Task.WhenAll(ocrTasks)).ToList();
+            // OCR pages one at a time to avoid OutOfMemoryException
+            // Sequential is safer — parallel OCR holds all images in memory simultaneously
+            var pageTexts = new List<string>();
+            foreach (var page in request.Pages)
+            {
+                var text = string.IsNullOrWhiteSpace(page)
+                    ? string.Empty
+                    : await _ocrService.OcrPageAsync(page);
+                pageTexts.Add(text ?? string.Empty);
+            }
 
             var boundaries = await _aiBatchSplitService.DetectBoundariesAsync(pageTexts);
 
@@ -230,9 +238,6 @@ public class IngestController : ControllerBase
     }
 
     // POST /api/ingest/scan-confirm-batch
-    // New server-side batch confirm — browser reload safe.
-    // Starts background job, returns immediately.
-    // Frontend polls scan-confirm-status every 2 seconds.
     [HttpPost("scan-confirm-batch")]
     public async Task<IActionResult> IngestScanConfirmBatch([FromBody] ScanConfirmBatchRequest request)
     {
@@ -247,7 +252,6 @@ public class IngestController : ControllerBase
         if (request?.Documents == null || request.Documents.Count == 0)
             return BadRequest(new { error = "No documents received." });
 
-        // Check if already running
         var current = _scanConfirmQueue.GetStatus(tenant.TenantId);
         if (current.IsRunning)
             return Ok(new { alreadyRunning = true, message = "Confirmation already in progress." });
@@ -263,7 +267,6 @@ public class IngestController : ControllerBase
     }
 
     // GET /api/ingest/scan-confirm-status
-    // Poll this every 2 seconds to get live per-document progress.
     [HttpGet("scan-confirm-status")]
     public async Task<IActionResult> GetScanConfirmStatus()
     {

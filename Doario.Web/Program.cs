@@ -18,6 +18,18 @@ public class Program
     {
         var builder = WebApplication.CreateBuilder(args);
 
+        // ── Request size limits for large scan uploads ────────────────────────────
+        builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(options =>
+        {
+            options.MultipartBodyLengthLimit = 268435456; // 256MB
+            options.ValueLengthLimit = 268435456;
+            options.KeyLengthLimit = 268435456;
+        });
+        builder.WebHost.ConfigureKestrel(options =>
+        {
+            options.Limits.MaxRequestBodySize = 268435456; // 256MB
+        });
+
         // ── Database ──────────────────────────────────────────────────────────
         builder.Services.AddDbContext<DoarioDataContext>(options =>
             options.UseSqlServer(
@@ -72,16 +84,10 @@ public class Program
             return new GraphServiceClient(credential);
         });
 
-        // ── Authorisation ─────────────────────────────────────────────────────────────
+        // ── Authorisation ─────────────────────────────────────────────────────
         builder.Services.AddAuthorization(options =>
         {
-            options.AddPolicy("DoarioAdmin", policy => policy.RequireAssertion(_ => true));
-            options.DefaultPolicy = new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
-                .RequireAssertion(_ => true)
-                .Build();
-            options.FallbackPolicy = new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
-                .RequireAssertion(_ => true)
-                .Build();
+            options.FallbackPolicy = options.DefaultPolicy;
         });
 
         // ── MVC + Identity UI ─────────────────────────────────────────────────
