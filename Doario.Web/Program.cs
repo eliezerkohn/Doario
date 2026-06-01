@@ -85,9 +85,16 @@ public class Program
         });
 
         // ── Authorisation ─────────────────────────────────────────────────────
+        // Demo mode — all routes open, React RequireAuth handles frontend protection
         builder.Services.AddAuthorization(options =>
         {
-            options.FallbackPolicy = options.DefaultPolicy;
+            options.AddPolicy("DoarioAdmin", policy => policy.RequireAssertion(_ => true));
+            options.DefaultPolicy = new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
+                .RequireAssertion(_ => true)
+                .Build();
+            options.FallbackPolicy = new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
+                .RequireAssertion(_ => true)
+                .Build();
         });
 
         // ── MVC + Identity UI ─────────────────────────────────────────────────
