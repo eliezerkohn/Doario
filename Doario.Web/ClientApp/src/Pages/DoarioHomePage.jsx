@@ -25,6 +25,18 @@ export default function DoarioHomePage() {
         setMeta("twitter:title", "Doario — AI Mail Digitisation Software");
         setMeta("twitter:description", "Turn physical mail into digital action items in under 60 seconds.");
 
+        // Google Analytics
+        if (!document.getElementById("ga-script")) {
+            const gaScript = document.createElement("script");
+            gaScript.id = "ga-script";
+            gaScript.async = true;
+            gaScript.src = "https://www.googletagmanager.com/gtag/js?id=G-5X3R24PRZP";
+            document.head.appendChild(gaScript);
+            const gaInline = document.createElement("script");
+            gaInline.textContent = `window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag("js",new Date());gtag("config","G-5X3R24PRZP");`;
+            document.head.appendChild(gaInline);
+        }
+
         // Schema.org structured data
         const schema = {
             "@context": "https://schema.org",
