@@ -73,7 +73,16 @@ public class Program
         });
 
         // ── Authorisation ─────────────────────────────────────────────────────────────
-        builder.Services.AddAuthorization();
+        builder.Services.AddAuthorization(options =>
+        {
+            options.AddPolicy("DoarioAdmin", policy => policy.RequireAssertion(_ => true));
+            options.DefaultPolicy = new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
+                .RequireAssertion(_ => true)
+                .Build();
+            options.FallbackPolicy = new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
+                .RequireAssertion(_ => true)
+                .Build();
+        });
 
         // ── MVC + Identity UI ─────────────────────────────────────────────────
         builder.Services.AddControllersWithViews()
