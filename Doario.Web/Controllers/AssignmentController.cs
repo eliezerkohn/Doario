@@ -45,6 +45,21 @@ public class AssignmentController : ControllerBase
         _approveAllQueue = approveAllQueue;
     }
 
+    // ── Helper: get admin staff, with demo fallback ───────────────────────────
+    private async Task<Doario.Data.Models.Mail.ImportedStaff> GetAdminStaffAsync()
+    {
+        var userEmail = User.FindFirst(ClaimTypes.Email)?.Value
+                      ?? User.FindFirst("preferred_username")?.Value ?? string.Empty;
+        var adminStaff = await _staff.GetByEmailAsync(userEmail, _tenant.TenantId);
+        if (adminStaff is null)
+        {
+            var allStaff = await _staff.GetAllForTenantAsync(_tenant.TenantId);
+            adminStaff = allStaff.FirstOrDefault(s => s.IsAdmin && s.IsActive)
+                      ?? allStaff.FirstOrDefault();
+        }
+        return adminStaff;
+    }
+
     [HttpGet("staff")]
     public async Task<IActionResult> GetStaff()
     {
@@ -64,9 +79,7 @@ public class AssignmentController : ControllerBase
     public async Task<IActionResult> Assign([FromBody] AssignRequest request)
     {
         if (!_tenant.IsResolved) return Unauthorized();
-        var userEmail = User.FindFirst(ClaimTypes.Email)?.Value
-                      ?? User.FindFirst("preferred_username")?.Value ?? string.Empty;
-        var adminStaff = await _staff.GetByEmailAsync(userEmail, _tenant.TenantId);
+        var adminStaff = await GetAdminStaffAsync();
         if (adminStaff is null) return BadRequest(new { error = "Admin staff record not found." });
         var (success, error) = await _assignmentService.AssignAsync(
             documentId: request.DocumentId,
@@ -107,7 +120,6 @@ public class AssignmentController : ControllerBase
         });
     }
 
-    // GET /api/assignment/suggestion/{documentId}
     [HttpGet("suggestion/{documentId:guid}")]
     public async Task<IActionResult> GetSuggestion(Guid documentId)
     {
@@ -152,13 +164,10 @@ public class AssignmentController : ControllerBase
         }));
     }
 
-    // GET /api/assignment/pending-suggestions
-    // Direct DB projection — no AiSummary in list
     [HttpGet("pending-suggestions")]
     public async Task<IActionResult> GetPendingSuggestions()
     {
         if (!_tenant.IsResolved) return Unauthorized();
-
         var results = await _db.DocumentAiSuggestions
             .Where(s => s.TenantId == _tenant.TenantId && s.SuggestionStatusId == 1)
             .OrderByDescending(s => s.CreatedAt)
@@ -176,7 +185,6 @@ public class AssignmentController : ControllerBase
                 StatusName = s.Document.DocumentStatus.Name,
             })
             .ToListAsync();
-
         return Ok(results);
     }
 
@@ -194,9 +202,7 @@ public class AssignmentController : ControllerBase
         if (!_tenant.IsResolved) return Unauthorized();
         var suggestion = await _suggestions.GetByIdAsync(suggestionId, _tenant.TenantId);
         if (suggestion is null) return NotFound();
-        var userEmail = User.FindFirst(ClaimTypes.Email)?.Value
-                      ?? User.FindFirst("preferred_username")?.Value ?? string.Empty;
-        var adminStaff = await _staff.GetByEmailAsync(userEmail, _tenant.TenantId);
+        var adminStaff = await GetAdminStaffAsync();
         if (adminStaff is null) return BadRequest(new { error = "Admin staff record not found." });
         var (success, error) = await _assignmentService.AssignAsync(
             documentId: suggestion.DocumentId,
@@ -212,36 +218,23 @@ public class AssignmentController : ControllerBase
         return Ok(new { message = "Suggestion approved and document assigned." });
     }
 
-    // POST /api/assignment/approve-all
-    // Starts a background job — returns immediately with job status
-    // Browser reloads won't affect processing
     [HttpPost("approve-all")]
     public async Task<IActionResult> ApproveAll()
     {
         if (!_tenant.IsResolved) return Unauthorized();
-
-        // Check if already running
         var currentStatus = _approveAllQueue.GetStatus(_tenant.TenantId.ToString());
         if (currentStatus.IsRunning)
             return Ok(new { alreadyRunning = true, message = "Approval already in progress." });
-
-        var userEmail = User.FindFirst(ClaimTypes.Email)?.Value
-                      ?? User.FindFirst("preferred_username")?.Value ?? string.Empty;
-        var adminStaff = await _staff.GetByEmailAsync(userEmail, _tenant.TenantId);
+        var adminStaff = await GetAdminStaffAsync();
         if (adminStaff is null) return BadRequest(new { error = "Admin staff record not found." });
-
-        // Get all pending suggestion IDs
         var suggestionIds = await _db.DocumentAiSuggestions
             .Where(s => s.TenantId == _tenant.TenantId && s.SuggestionStatusId == 1)
             .Select(s => s.DocumentAiSuggestionId)
             .ToListAsync();
-
         if (!suggestionIds.Any())
             return Ok(new { message = "No pending suggestions.", total = 0 });
-
         var started = _approveAllQueue.StartApproveAll(
             _tenant.TenantId, suggestionIds, adminStaff.ImportedStaffId);
-
         return Ok(new
         {
             started,
@@ -250,8 +243,6 @@ public class AssignmentController : ControllerBase
         });
     }
 
-    // GET /api/assignment/approve-all-status
-    // Poll this to get live progress — safe to call every 2 seconds
     [HttpGet("approve-all-status")]
     public IActionResult GetApproveAllStatus()
     {
@@ -267,9 +258,7 @@ public class AssignmentController : ControllerBase
         if (!_tenant.IsResolved) return Unauthorized();
         var suggestion = await _suggestions.GetByIdAsync(suggestionId, _tenant.TenantId);
         if (suggestion is null) return NotFound();
-        var userEmail = User.FindFirst(ClaimTypes.Email)?.Value
-                      ?? User.FindFirst("preferred_username")?.Value ?? string.Empty;
-        var adminStaff = await _staff.GetByEmailAsync(userEmail, _tenant.TenantId);
+        var adminStaff = await GetAdminStaffAsync();
         if (adminStaff is null) return BadRequest(new { error = "Admin staff record not found." });
         var (success, error) = await _assignmentService.AssignAsync(
             documentId: suggestion.DocumentId,
