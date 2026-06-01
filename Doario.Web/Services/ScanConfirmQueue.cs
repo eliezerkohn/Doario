@@ -55,27 +55,48 @@ public class ScanConfirmQueue
 
     /// <summary>
     /// Starts confirming a batch of documents server-side.
-    /// Returns false if a job is already running for this tenant.
+    /// If a job is already running, adds new documents to the existing job.
     /// </summary>
     public bool Start(Guid tenantId, string apiKey, List<ScanConfirmRequest> documents)
     {
+        var newDocs = documents.Select(d => new ScanConfirmDocStatus
+        {
+            TempId = d.TempId,
+            Index = d.DocumentIndex,
+            State = ScanConfirmState.Waiting,
+            Pages = d.Pages,
+            BatchScanId = d.BatchScanId,
+            PageStart = d.PageStart,
+            PageEnd = d.PageEnd,
+        }).ToList();
+
+        // If job is already running — add new documents to it and process them
         if (_jobs.TryGetValue(tenantId, out var existing) && existing.IsRunning)
-            return false;
+        {
+            lock (existing)
+            {
+                existing.Documents.AddRange(newDocs);
+            }
+            // Process the new documents in the existing job
+            _ = Task.Run(async () =>
+            {
+                var semaphore = new SemaphoreSlim(MaxParallel, MaxParallel);
+                var tasks = newDocs.Select(doc => Task.Run(async () =>
+                {
+                    await semaphore.WaitAsync();
+                    try { await ProcessDocumentAsync(tenantId, apiKey, existing, doc); }
+                    finally { semaphore.Release(); }
+                }));
+                await Task.WhenAll(tasks);
+            });
+            return true;
+        }
 
         var job = new ScanConfirmJob
         {
             IsRunning = true,
             StartedAt = DateTime.UtcNow,
-            Documents = documents.Select(d => new ScanConfirmDocStatus
-            {
-                TempId = d.TempId,
-                Index = d.DocumentIndex,
-                State = ScanConfirmState.Waiting,
-                Pages = d.Pages,
-                BatchScanId = d.BatchScanId,
-                PageStart = d.PageStart,
-                PageEnd = d.PageEnd,
-            }).ToList(),
+            Documents = newDocs,
         };
 
         _jobs[tenantId] = job;

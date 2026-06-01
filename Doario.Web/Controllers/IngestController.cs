@@ -252,10 +252,6 @@ public class IngestController : ControllerBase
         if (request?.Documents == null || request.Documents.Count == 0)
             return BadRequest(new { error = "No documents received." });
 
-        var current = _scanConfirmQueue.GetStatus(tenant.TenantId);
-        if (current.IsRunning)
-            return Ok(new { alreadyRunning = true, message = "Confirmation already in progress." });
-
         var started = _scanConfirmQueue.Start(tenant.TenantId, apiKey, request.Documents);
 
         return Ok(new
