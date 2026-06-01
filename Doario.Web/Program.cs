@@ -72,11 +72,8 @@ public class Program
             return new GraphServiceClient(credential);
         });
 
-        // ── Authorisation ─────────────────────────────────────────────────────
-        builder.Services.AddAuthorization(options =>
-        {
-            options.FallbackPolicy = options.DefaultPolicy;
-        });
+        // ── Authorisation ─────────────────────────────────────────────────────────────
+        builder.Services.AddAuthorization();
 
         // ── MVC + Identity UI ─────────────────────────────────────────────────
         builder.Services.AddControllersWithViews()
