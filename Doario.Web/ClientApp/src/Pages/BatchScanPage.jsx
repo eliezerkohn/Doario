@@ -430,6 +430,44 @@ export default function BatchScanPage() {
         setStatus(STATUS.READY);
     };
 
+    // ── Split document at page boundary ──────────────────────────────────────
+    const handleSplit = (doc, splitAfterPageIndex) => {
+        // splitAfterPageIndex is 0-based index of last page in first document
+        const pagesA = doc.pages.slice(0, splitAfterPageIndex + 1);
+        const pagesB = doc.pages.slice(splitAfterPageIndex + 1);
+
+        if (pagesA.length === 0 || pagesB.length === 0) return;
+
+        const docA = {
+            ...doc,
+            tempId: doc.tempId,
+            label: doc.label,
+            pages: pagesA,
+            previewBase64: pagesA[0] ?? null,
+            pageRange: pagesA.length === 1 ? '1 page' : `${pagesA.length} pages`,
+            confirmed: false, confirming: false,
+            documentId: null, sharePointUrl: null,
+        };
+
+        const docB = {
+            ...doc,
+            tempId: `${doc.tempId}_split_${Date.now()}`,
+            label: `Document ${documents.length + 1}`,
+            pages: pagesB,
+            previewBase64: pagesB[0] ?? null,
+            pageRange: pagesB.length === 1 ? '1 page' : `${pagesB.length} pages`,
+            confirmed: false, confirming: false,
+            documentId: null, sharePointUrl: null,
+        };
+
+        const newDocs = documents.map(d => d.tempId === doc.tempId ? docA : d);
+        const insertIdx = newDocs.findIndex(d => d.tempId === doc.tempId);
+        newDocs.splice(insertIdx + 1, 0, docB);
+
+        setDocuments(newDocs);
+        setSelected(docA);
+    };
+
     const handleDone = () => {
         clearSession();
         stopPolling();
@@ -608,12 +646,23 @@ export default function BatchScanPage() {
                             <div ref={previewRef} style={S.previewImageWrap}>
                                 {selected.pages?.length > 0 ? (
                                     selected.pages.map((p, i) => p ? (
-                                        <div key={i} style={S.previewPageWrap}>
-                                            <div style={S.previewPageLabel}>Page {i + 1}</div>
-                                            <img src={`data:image/jpeg;base64,${p}`} alt={`Page ${i + 1}`} style={S.previewImage} />
-                                            {i === 0 && selected.confirming && <div style={S.savingOverlay}>⏳ Saving to server…</div>}
-                                            {i === 0 && selected.confirmed && <div style={S.savedOverlay}>✓ Saved</div>}
-                                        </div>
+                                        <React.Fragment key={i}>
+                                            <div style={S.previewPageWrap}>
+                                                <div style={S.previewPageLabel}>Page {i + 1}</div>
+                                                <img src={`data:image/jpeg;base64,${p}`} alt={`Page ${i + 1}`} style={S.previewImage} />
+                                                {i === 0 && selected.confirming && <div style={S.savingOverlay}>⏳ Saving to server…</div>}
+                                                {i === 0 && selected.confirmed && <div style={S.savedOverlay}>✓ Saved</div>}
+                                            </div>
+                                            {i < selected.pages.length - 1 && !selected.confirmed && (
+                                                <button
+                                                    style={S.btnSplit}
+                                                    onClick={() => handleSplit(selected, i)}
+                                                    title="Split document here"
+                                                >
+                                                    ✂ Split here
+                                                </button>
+                                            )}
+                                        </React.Fragment>
                                     ) : null)
                                 ) : selected.previewBase64 ? (
                                     <div style={S.previewPageWrap}>
@@ -726,6 +775,7 @@ const S = {
     previewMetaItem: { display: 'flex', flexDirection: 'column', gap: 2 },
     metaLabel: { fontSize: 10, color: '#7a9ab0', textTransform: 'uppercase', letterSpacing: '1px' },
     metaValue: { fontSize: 12, color: '#1a2e3b', fontWeight: 500 },
+    btnSplit: { padding: '6px 16px', background: 'rgba(220,38,38,0.06)', color: '#dc2626', border: '1px dashed #dc2626', borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', alignSelf: 'center', marginTop: -8 },
     emptyState: { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '80px 32px', gap: 12, textAlign: 'center' },
     emptyIcon: { fontSize: 40 },
     emptyTitle: { fontSize: 18, fontWeight: 700, color: '#0f2d4a' },
